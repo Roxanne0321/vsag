@@ -262,6 +262,43 @@ public:
         return dist;
     }
 
+    tl::expected<vsag::DatasetPtr, vsag::Error>
+    getBatchDistanceByLabel(const int64_t* ids, const void* data_point, int64_t count) override {
+        std::unique_lock<std::mutex> lock_table(label_lookup_lock);
+        int64_t valid_cnt = 0;
+        auto result = vsag::Dataset::Make();
+        result->Owner(true, allocator_);
+        auto* distances = (float*)allocator_->Allocate(sizeof(float) * count);
+        result->Distances(distances);
+        for (int i = 0; i < count; i++) {
+            auto search = label_lookup_.find(ids[i]);
+            if (search == label_lookup_.end()) {
+                distances[i] = -1;
+            } else {
+                InnerIdType internal_id = search->second;
+                float dist =
+                    fstdistfunc_(data_point, getDataByInternalId(internal_id), dist_func_param_);
+                distances[i] = dist;
+                valid_cnt++;
+            }
+        }
+        result->NumElements(valid_cnt);
+        return std::move(result);
+    }
+
+    void
+    copyDataByLabel(LabelType label, void* data_point) override {
+        std::unique_lock lock_table(label_lookup_lock);
+
+        auto search = label_lookup_.find(label);
+        if (search == label_lookup_.end() || isMarkedDeleted(search->second)) {
+            throw std::runtime_error("Label not found");
+        }
+        InnerIdType internal_id = search->second;
+
+        memcpy(data_point, getDataByInternalId(internal_id), data_size_);
+    }
+
     bool
     isValidLabel(LabelType label) override {
         std::unique_lock<std::mutex> lock_table(label_lookup_lock);
@@ -375,7 +412,7 @@ public:
                                float*& dist_map,
                                size_t ef,
                                size_t k,
-                               vsag::BaseFilterFunctor* isIdAllowed = nullptr) const {
+                               const vsag::FilterPtr is_id_allowed = nullptr) const {
         VisitedListPtr vl = visited_list_pool_->getFreeVisitedList();
         vl_type* visited_array = vl->mass;
         vl_type visited_array_tag = vl->curV;
@@ -511,7 +548,7 @@ public:
                            float*& dist_map,
                            size_t ef,
                            size_t k,
-                           vsag::BaseFilterFunctor* isIdAllowed = nullptr) const {
+                           const vsag::FilterPtr is_id_allowed = nullptr) const {
         VisitedListPtr vl = visited_list_pool_->getFreeVisitedList();
         vl_type* visited_array = vl->mass;
         vl_type visited_array_tag = vl->curV;
@@ -635,7 +672,7 @@ public:
     //    searchBaseLayerST(tableint ep_id,
     //                      const void* data_point,
     //                      float radius,
-    //                      vsag::BaseFilterFunctor* isIdAllowed = nullptr) const {
+    //                      const vsag::FilterPtr is_id_allowed = nullptr) const {
     //        VisitedList* vl = visited_list_pool_->getFreeVisitedList();
     //        vl_type* visited_array = vl->mass;
     //        vl_type visited_array_tag = vl->curV;
@@ -651,7 +688,7 @@ public:
     //
     //        float lower_bound;
     //        if ((!has_deletions || !isMarkedDeleted(ep_id)) &&
-    //            ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(ep_id)))) {
+    //            ((!is_id_allowed) || (*is_id_allowed)(getExternalLabel(ep_id)))) {
     //            float dist = fstdistfunc_(data_point, getDataByInternalId(ep_id), dist_func_param_);
     //            lower_bound = dist;
     //            if (dist < radius)
@@ -713,7 +750,7 @@ public:
     //#endif
     //
     //                        if ((!has_deletions || !isMarkedDeleted(candidate_id)) &&
-    //                            ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(candidate_id))))
+    //                            ((!is_id_allowed) || (*is_id_allowed)(getExternalLabel(candidate_id))))
     //                            if (dist < radius)
     //                                top_candidates.emplace(dist, candidate_id);
     //
@@ -1144,39 +1181,6 @@ public:
         out_stream.write((char*)node_cluster_dist_, max_elements_ * sizeof(float));
     }
 
-    void
-    saveIndex(const std::string& location) override {
-        throw std::runtime_error("static hnsw does not support save index");
-        //        std::ofstream output(location, std::ios::binary);
-        //        std::streampos position;
-        //
-        //        writeBinaryPOD(output, offsetLevel0_);
-        //        writeBinaryPOD(output, max_elements_);
-        //        writeBinaryPOD(output, cur_element_count_);
-        //        writeBinaryPOD(output, size_data_per_element_);
-        //        writeBinaryPOD(output, label_offset_);
-        //        writeBinaryPOD(output, offsetData_);
-        //        writeBinaryPOD(output, maxlevel_);
-        //        writeBinaryPOD(output, enterpoint_node_);
-        //        writeBinaryPOD(output, maxM_);
-        //
-        //        writeBinaryPOD(output, maxM0_);
-        //        writeBinaryPOD(output, M_);
-        //        writeBinaryPOD(output, mult_);
-        //        writeBinaryPOD(output, ef_construction_);
-        //
-        //        output.write(data_level0_memory_, cur_element_count_ * size_data_per_element_);
-        //
-        //        for (size_t i = 0; i < cur_element_count_; i++) {
-        //            unsigned int linkListSize =
-        //                element_levels_[i] > 0 ? size_links_per_element_ * element_levels_[i] : 0;
-        //            writeBinaryPOD(output, linkListSize);
-        //            if (linkListSize)
-        //                output.write(linkLists_[i], linkListSize);
-        //        }
-        //        output.close();
-    }
-
     // load index from a file stream
     void
     loadIndex(StreamReader& in_stream, SpaceInterface* s, size_t max_elements_i = 0) override {
@@ -1445,7 +1449,7 @@ public:
     searchKnn(const void* query_data,
               size_t k,
               uint64_t ef,
-              vsag::BaseFilterFunctor* isIdAllowed = nullptr) const override {
+              const vsag::FilterPtr is_id_allowed = nullptr) const override {
         std::priority_queue<std::pair<float, LabelType>> result;
         if (cur_element_count_ == 0)
             return result;
@@ -1492,17 +1496,17 @@ public:
         if (num_deleted_) {
             //            if (!is_trained_infer)
             //                top_candidates = searchBaseLayerST<true, true>(
-            //                    currObj, query_data, std::max(ef_, k), isIdAllowed);
+            //                    currObj, query_data, std::max(ef_, k), is_id_allowed);
             //            else
             top_candidates = searchBaseLayerPQSIMDinfer<true, true>(
-                currObj, query_data, dist_map, std::max(ef, k), k, isIdAllowed);
+                currObj, query_data, dist_map, std::max(ef, k), k, is_id_allowed);
         } else {
             //            if (!is_trained_infer)
             //                top_candidates = searchBaseLayerST<false, true>(
-            //                    currObj, query_data, std::max(ef, k), isIdAllowed);
+            //                    currObj, query_data, std::max(ef, k), is_id_allowed);
             //            else
             top_candidates = searchBaseLayerPQSIMDinfer<true, true>(
-                currObj, query_data, dist_map, std::max(ef, k), k, isIdAllowed);
+                currObj, query_data, dist_map, std::max(ef, k), k, is_id_allowed);
         }
 
         while (top_candidates.size() > k) {
@@ -1521,7 +1525,7 @@ public:
     searchRange(const void* query_data,
                 float radius,
                 uint64_t ef,
-                vsag::BaseFilterFunctor* isIdAllowed = nullptr) const override {
+                const vsag::FilterPtr is_id_allowed = nullptr) const override {
         std::runtime_error("static hnsw does not support range search");
         //        std::priority_queue<std::pair<float, LabelType>> result;
         //        if (cur_element_count_ == 0)
@@ -1567,7 +1571,7 @@ public:
         //                "not support perform range search on a index that deleted some vectors");
         //        } else {
         //            top_candidates =
-        //                searchBaseLayerST<false, true>(currObj, query_data, radius, isIdAllowed);
+        //                searchBaseLayerST<false, true>(currObj, query_data, radius, is_id_allowed);
         //            // std::cout << "top_candidates.size(): " << top_candidates.size() << std::endl;
         //        }
         //

@@ -23,12 +23,15 @@
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 
-#include "../algorithm/hnswlib/hnswlib.h"
-#include "../common.h"
-#include "../logger.h"
-#include "../safe_allocator.h"
-#include "../utils.h"
-#include "./hnsw_zparameters.h"
+#include "algorithm/hnswlib/hnswlib.h"
+#include "common.h"
+#include "data_cell/flatten_datacell.h"
+#include "data_cell/graph_datacell_parameter.h"
+#include "index/hnsw_zparameters.h"
+#include "io/memory_block_io_parameter.h"
+#include "io/memory_io_parameter.h"
+#include "quantization/fp32_quantizer_parameter.h"
+#include "safe_allocator.h"
 #include "vsag/binaryset.h"
 #include "vsag/constants.h"
 #include "vsag/errors.h"
@@ -41,7 +44,9 @@ const static int64_t DEFAULT_MAX_ELEMENT = 1;
 const static int MINIMAL_M = 8;
 const static int MAXIMAL_M = 64;
 const static uint32_t GENERATE_SEARCH_K = 50;
+const static uint32_t UPDATE_CHECK_SEARCH_K = 10;
 const static uint32_t GENERATE_SEARCH_L = 400;
+const static uint32_t UPDATE_CHECK_SEARCH_L = 100;
 const static float GENERATE_OMEGA = 0.51;
 
 HNSW::HNSW(HnswParameters hnsw_params, const IndexCommonParam& index_common_param)
@@ -50,7 +55,9 @@ HNSW::HNSW(HnswParameters hnsw_params, const IndexCommonParam& index_common_para
       use_conjugate_graph_(hnsw_params.use_conjugate_graph),
       use_reversed_edges_(hnsw_params.use_reversed_edges),
       type_(hnsw_params.type),
-      dim_(index_common_param.dim_) {
+      max_degree_(hnsw_params.max_degree),
+      dim_(index_common_param.dim_),
+      index_common_param_(index_common_param) {
     auto M = std::min(  // NOLINT(readability-identifier-naming)
         std::max((int)hnsw_params.max_degree, MINIMAL_M),
         MAXIMAL_M);
@@ -59,11 +66,11 @@ HNSW::HNSW(HnswParameters hnsw_params, const IndexCommonParam& index_common_para
         throw std::runtime_error(MESSAGE_PARAMETER);
     }
 
-    if (hnsw_params.use_conjugate_graph) {
-        conjugate_graph_ = std::make_shared<ConjugateGraph>();
-    }
-
     allocator_ = index_common_param.allocator_;
+
+    if (hnsw_params.use_conjugate_graph) {
+        conjugate_graph_ = std::make_shared<ConjugateGraph>(allocator_.get());
+    }
 
     if (!use_static_) {
         alg_hnsw_ =
@@ -110,7 +117,7 @@ HNSW::build(const DatasetPtr& base) {
 
         std::unique_lock lock(rw_mutex_);
 
-        auto ids = base->GetIds();
+        const auto* ids = base->GetIds();
         void* vectors = nullptr;
         size_t data_size = 0;
         get_vectors(base, &vectors, &data_size);
@@ -154,7 +161,7 @@ HNSW::add(const DatasetPtr& base) {
                        fmt::format("base.dim({}) must be equal to index.dim({})", base_dim, dim_));
 
         int64_t num_elements = base->GetNumElements();
-        auto ids = base->GetIds();
+        const auto* ids = base->GetIds();
         void* vectors = nullptr;
         size_t data_size = 0;
         get_vectors(base, &vectors, &data_size);
@@ -182,18 +189,17 @@ HNSW::knn_search_internal(const DatasetPtr& query,
                           const std::string& parameters,
                           const FilterType& filter_obj) const {
     if (filter_obj) {
-        BitsetOrCallbackFilter filter(filter_obj);
-        return this->knn_search(query, k, parameters, &filter);
-    } else {
-        return this->knn_search(query, k, parameters, nullptr);
+        auto filter = std::make_shared<UniqueFilter>(filter_obj);
+        return this->knn_search(query, k, parameters, filter);
     }
+    return this->knn_search(query, k, parameters, nullptr);
 };
 
 tl::expected<DatasetPtr, Error>
 HNSW::knn_search(const DatasetPtr& query,
                  int64_t k,
                  const std::string& parameters,
-                 BaseFilterFunctor* filter_ptr) const {
+                 const FilterPtr filter_ptr) const {
 #ifndef ENABLE_TESTS
     SlowTaskTimer t_total("hnsw knnsearch", 20);
 #endif
@@ -244,7 +250,7 @@ HNSW::knn_search(const DatasetPtr& query,
         // update stats
         {
             std::lock_guard<std::mutex> lock(stats_mutex_);
-            result_queues_[STATSTIC_KNN_TIME].Push(time_cost);
+            result_queues_[STATSTIC_KNN_TIME].Push(static_cast<float>(time_cost));
         }
 
         // return result
@@ -272,14 +278,16 @@ HNSW::knn_search(const DatasetPtr& query,
             results.pop();
         }
 
-        result->Dim(results.size())->NumElements(1)->Owner(true, allocator_.get());
+        result->Dim(static_cast<int64_t>(results.size()))
+            ->NumElements(1)
+            ->Owner(true, allocator_.get());
 
         auto* ids = (int64_t*)allocator_->Allocate(sizeof(int64_t) * results.size());
         result->Ids(ids);
         auto* dists = (float*)allocator_->Allocate(sizeof(float) * results.size());
         result->Distances(dists);
 
-        for (int64_t j = results.size() - 1; j >= 0; --j) {
+        for (auto j = static_cast<int64_t>(results.size() - 1); j >= 0; --j) {
             dists[j] = results.top().first;
             ids[j] = results.top().second;
             results.pop();
@@ -305,18 +313,17 @@ HNSW::range_search_internal(const DatasetPtr& query,
                             const FilterType& filter_obj,
                             int64_t limited_size) const {
     if (filter_obj) {
-        BitsetOrCallbackFilter filter(filter_obj);
-        return this->range_search(query, radius, parameters, &filter, limited_size);
-    } else {
-        return this->range_search(query, radius, parameters, nullptr, limited_size);
+        auto filter = std::make_shared<UniqueFilter>(filter_obj);
+        return this->range_search(query, radius, parameters, filter, limited_size);
     }
+    return this->range_search(query, radius, parameters, nullptr, limited_size);
 };
 
 tl::expected<DatasetPtr, Error>
 HNSW::range_search(const DatasetPtr& query,
                    float radius,
                    const std::string& parameters,
-                   BaseFilterFunctor* filter_ptr,
+                   const FilterPtr filter_ptr,
                    int64_t limited_size) const {
 #ifndef ENABLE_TESTS
     SlowTaskTimer t("hnsw rangesearch", 20);
@@ -371,7 +378,7 @@ HNSW::range_search(const DatasetPtr& query,
         // update stats
         {
             std::lock_guard<std::mutex> lock(stats_mutex_);
-            result_queues_[STATSTIC_KNN_TIME].Push(time_cost);
+            result_queues_[STATSTIC_KNN_TIME].Push(static_cast<float>(time_cost));
         }
 
         // return result
@@ -384,12 +391,14 @@ HNSW::range_search(const DatasetPtr& query,
         if (limited_size >= 1) {
             target_size = std::min((size_t)limited_size, target_size);
         }
-        result->Dim(target_size)->NumElements(1)->Owner(true, allocator_.get());
+        result->Dim(static_cast<int64_t>(target_size))
+            ->NumElements(1)
+            ->Owner(true, allocator_.get());
         auto* ids = (int64_t*)allocator_->Allocate(sizeof(int64_t) * target_size);
         result->Ids(ids);
         auto* dists = (float*)allocator_->Allocate(sizeof(float) * target_size);
         result->Distances(dists);
-        for (int64_t j = results.size() - 1; j >= 0; --j) {
+        for (auto j = static_cast<int64_t>(results.size() - 1); j >= 0; --j) {
             if (j < target_size) {
                 dists[j] = results.top().first;
                 ids[j] = results.top().second;
@@ -410,7 +419,7 @@ HNSW::range_search(const DatasetPtr& query,
 }
 
 BinarySet
-HNSW::empty_binaryset() const {
+HNSW::empty_binaryset() {
     // version 0 pairs:
     // - hnsw_blank: b"EMPTY_HNSW"
     const std::string empty_str = "EMPTY_HNSW";
@@ -615,9 +624,17 @@ HNSW::update_id(int64_t old_id, int64_t new_id) {
     }
 
     try {
+        if (old_id == new_id) {
+            return true;
+        }
+
         // note that the validation of old_id is handled within updateLabel.
         std::reinterpret_pointer_cast<hnswlib::HierarchicalNSW>(alg_hnsw_)->updateLabel(old_id,
                                                                                         new_id);
+        if (use_conjugate_graph_) {
+            std::unique_lock lock(rw_mutex_);
+            conjugate_graph_->UpdateId(old_id, new_id);
+        }
     } catch (const std::runtime_error& e) {
 #ifndef ENABLE_TESTS
         logger::warn(
@@ -630,8 +647,7 @@ HNSW::update_id(int64_t old_id, int64_t new_id) {
 }
 
 tl::expected<bool, Error>
-HNSW::update_vector(int64_t id, const DatasetPtr& new_base, bool need_fine_tune) {
-    // TODO(ZXY): implement need_fine_tune to allow update with distant vector
+HNSW::update_vector(int64_t id, const DatasetPtr& new_base, bool force_update) {
     if (use_static_) {
         LOG_ERROR_AND_RETURNS(ErrorType::UNSUPPORTED_INDEX_OPERATION,
                               "static hnsw does not support update");
@@ -642,6 +658,40 @@ HNSW::update_vector(int64_t id, const DatasetPtr& new_base, bool need_fine_tune)
         void* new_base_vec = nullptr;
         size_t data_size = 0;
         get_vectors(new_base, &new_base_vec, &data_size);
+
+        if (not force_update) {
+            std::shared_ptr<int8_t[]> base_data(new int8_t[data_size]);
+            auto base = Dataset::Make();
+
+            // check if id exists and get copied base data
+            std::reinterpret_pointer_cast<hnswlib::HierarchicalNSW>(alg_hnsw_)->copyDataByLabel(
+                id, base_data.get());
+            set_dataset(base, base_data.get(), 1);
+
+            // search neighbors
+            auto neighbors = *this->knn_search(base,
+                                               vsag::UPDATE_CHECK_SEARCH_K,
+                                               fmt::format(R"({{
+                                                                "hnsw":
+                                                                    {{
+                                                                        "ef_search": {}
+                                                                    }}
+                                                            }})",
+                                                           vsag::UPDATE_CHECK_SEARCH_L),
+                                               nullptr);
+
+            // check whether the neighborhood relationship is same
+            float self_dist = std::reinterpret_pointer_cast<hnswlib::HierarchicalNSW>(alg_hnsw_)
+                                  ->getDistanceByLabel(id, new_base_vec);
+            for (int i = 0; i < neighbors->GetDim(); i++) {
+                float neighbor_dist =
+                    std::reinterpret_pointer_cast<hnswlib::HierarchicalNSW>(alg_hnsw_)
+                        ->getDistanceByLabel(neighbors->GetIds()[i], new_base_vec);
+                if (neighbor_dist < self_dist) {
+                    return false;
+                }
+            }
+        }
 
         // note that the validation of old_id is handled within updatePoint.
         std::reinterpret_pointer_cast<hnswlib::HierarchicalNSW>(alg_hnsw_)->updateVector(
@@ -703,14 +753,13 @@ HNSW::feedback(const DatasetPtr& query,
     }
 
     auto result = this->knn_search(query, k, parameters, nullptr);
-    if (result.has_value()) {
-        std::unique_lock lock(rw_mutex_);
-        return this->feedback(*result, global_optimum_tag_id, k);
-    } else {
+    if (not result.has_value()) {
         LOG_ERROR_AND_RETURNS(ErrorType::INVALID_ARGUMENT,
                               "failed to feedback(invalid argument): ",
                               result.error().message);
     }
+    std::unique_lock lock(rw_mutex_);
+    return this->feedback(*result, global_optimum_tag_id, k);
 }
 
 tl::expected<uint32_t, Error>
@@ -721,7 +770,7 @@ HNSW::feedback(const DatasetPtr& result, int64_t global_optimum_tag_id, int64_t 
             "failed to feedback(invalid argument): global optimum tag id doesn't belong to index");
     }
 
-    auto tag_ids = result->GetIds();
+    const auto* tag_ids = result->GetIds();
     k = std::min(k, result->GetDim());
     uint32_t successfully_feedback = 0;
 
@@ -751,9 +800,9 @@ HNSW::brute_force(const DatasetPtr& query, int64_t k) {
 
         auto result = Dataset::Make();
         result->NumElements(k)->Owner(true, allocator_.get());
-        int64_t* ids = (int64_t*)allocator_->Allocate(sizeof(int64_t) * k);
+        auto* ids = (int64_t*)allocator_->Allocate(sizeof(int64_t) * k);
         result->Ids(ids);
-        float* dists = (float*)allocator_->Allocate(sizeof(float) * k);
+        auto* dists = (float*)allocator_->Allocate(sizeof(float) * k);
         result->Distances(dists);
 
         void* vector = nullptr;
@@ -765,7 +814,7 @@ HNSW::brute_force(const DatasetPtr& query, int64_t k) {
             alg_hnsw_->bruteForce(vector, k);
         result->Dim(std::min(k, (int64_t)bf_result.size()));
 
-        for (int i = result->GetDim() - 1; i >= 0; i--) {
+        for (auto i = static_cast<int32_t>(result->GetDim() - 1); i >= 0; i--) {
             ids[i] = bf_result.top().second;
             dists[i] = bf_result.top().first;
             bf_result.pop();
@@ -800,8 +849,6 @@ HNSW::pretrain(const std::vector<int64_t>& base_tag_ids,
     uint32_t data_size = 0;
     uint32_t add_edges = 0;
     int64_t topk_neighbor_tag_id;
-    const void* topk_data;
-    const void* base_data;
     auto base = Dataset::Make();
     auto generated_query = Dataset::Make();
     if (type_ == DataTypes::DATA_TYPE_INT8) {
@@ -809,20 +856,22 @@ HNSW::pretrain(const std::vector<int64_t>& base_tag_ids,
     } else {
         data_size = dim_ * 4;
     }
+    std::shared_ptr<int8_t[]> base_data(new int8_t[data_size]);
+    std::shared_ptr<int8_t[]> topk_data(new int8_t[data_size]);
 
     std::shared_ptr<int8_t[]> generated_data(new int8_t[data_size]);
     set_dataset(generated_query, generated_data.get(), 1);
 
     for (const int64_t& base_tag_id : base_tag_ids) {
         try {
-            base_data = (const void*)this->alg_hnsw_->getDataByLabel(base_tag_id);
-            set_dataset(base, base_data, 1);
+            std::reinterpret_pointer_cast<hnswlib::HierarchicalNSW>(alg_hnsw_)->copyDataByLabel(
+                base_tag_id, base_data.get());
+            set_dataset(base, base_data.get(), 1);
         } catch (const std::runtime_error& e) {
-            LOG_ERROR_AND_RETURNS(
-                ErrorType::INVALID_ARGUMENT,
-                fmt::format(
-                    "failed to pretrain(invalid argument): bas tag id ({}) doesn't belong to index",
-                    base_tag_id));
+            LOG_ERROR_AND_RETURNS(ErrorType::INVALID_ARGUMENT,
+                                  fmt::format("failed to pretrain(invalid argument): base tag id "
+                                              "({}) doesn't belong to index",
+                                              base_tag_id));
         }
 
         auto result = this->knn_search(base,
@@ -842,17 +891,19 @@ HNSW::pretrain(const std::vector<int64_t>& base_tag_ids,
             if (topk_neighbor_tag_id == base_tag_id) {
                 continue;
             }
-            topk_data = (const void*)this->alg_hnsw_->getDataByLabel(topk_neighbor_tag_id);
+
+            std::reinterpret_pointer_cast<hnswlib::HierarchicalNSW>(alg_hnsw_)->copyDataByLabel(
+                topk_neighbor_tag_id, topk_data.get());
 
             for (int d = 0; d < dim_; d++) {
                 if (type_ == DataTypes::DATA_TYPE_INT8) {
                     generated_data.get()[d] =
-                        vsag::GENERATE_OMEGA * (float)(((int8_t*)base_data)[d]) +
-                        (1 - vsag::GENERATE_OMEGA) * (float)(((int8_t*)topk_data)[d]);
+                        vsag::GENERATE_OMEGA * (float)(base_data[d]) +  // NOLINT
+                        (1 - vsag::GENERATE_OMEGA) * (float)(topk_data[d]);
                 } else {
                     ((float*)generated_data.get())[d] =
-                        vsag::GENERATE_OMEGA * ((float*)base_data)[d] +
-                        (1 - vsag::GENERATE_OMEGA) * ((float*)topk_data)[d];
+                        vsag::GENERATE_OMEGA * ((float*)base_data.get())[d] +
+                        (1 - vsag::GENERATE_OMEGA) * ((float*)topk_data.get())[d];
                 }
             }
 
@@ -940,7 +991,99 @@ HNSW::init_feature_list() {
                                IndexFeature::SUPPORT_SERIALIZE_BINARY_SET,
                                IndexFeature::SUPPORT_SERIALIZE_FILE});
     // other
-    feature_list_.SetFeature(IndexFeature::SUPPORT_CAL_DISTANCE_BY_ID);
+    feature_list_.SetFeatures({IndexFeature::SUPPORT_CAL_DISTANCE_BY_ID,
+                               IndexFeature::SUPPORT_CHECK_ID_EXIST,
+                               IndexFeature::SUPPORT_MERGE_INDEX});
+}
+
+bool
+HNSW::ExtractDataAndGraph(FlattenInterfacePtr& data,
+                          GraphInterfacePtr& graph,
+                          Vector<LabelType>& ids,
+                          IdMapFunction func,
+                          Allocator* allocator) {
+    if (use_static_) {
+        return false;
+    }
+    auto hnsw = std::static_pointer_cast<hnswlib::HierarchicalNSW>(alg_hnsw_);
+    auto cur_element_count = hnsw->getCurrentElementCount();
+    int64_t origin_data_num = data->total_count_;
+    int64_t valid_id_count = 0;
+    BitsetPtr bitset = std::make_shared<BitsetImpl>();
+    for (auto i = 0; i < cur_element_count; ++i) {
+        int64_t id = hnsw->getExternalLabel(i);
+        auto [is_exist, new_id] = func(id);
+        if (not is_exist) {
+            bitset->Set(i);
+        }
+        auto offset = valid_id_count + origin_data_num;
+        char* vector_data = hnsw->getDataByInternalId(i);
+        data->InsertVector(reinterpret_cast<float*>(vector_data));
+        int* link_data = (int*)hnsw->getLinklistAtLevel(i, 0);
+        size_t size = hnsw->getListCount((unsigned int*)link_data);
+        Vector<InnerIdType> edge(allocator);
+        for (int j = 0; j < size; ++j) {
+            if (not bitset->Test(*(link_data + 1 + j))) {
+                edge.push_back(origin_data_num + *(link_data + 1 + j));
+            }
+        }
+        graph->InsertNeighborsById(offset, edge);
+        graph->IncreaseTotalCount(1);
+        ids.push_back(new_id);
+        valid_id_count++;
+    }
+    return true;
+}
+
+bool
+HNSW::SetDataAndGraph(FlattenInterfacePtr& data, GraphInterfacePtr& graph, Vector<LabelType>& ids) {
+    if (use_static_) {
+        return false;
+    }
+    auto hnsw = std::static_pointer_cast<hnswlib::HierarchicalNSW>(alg_hnsw_);
+    hnsw->setDataAndGraph(data, graph, ids);
+    return true;
+}
+
+void
+extract_data_and_graph(const std::vector<MergeUnit>& merge_units,
+                       FlattenInterfacePtr& data,
+                       GraphInterfacePtr& graph,
+                       Vector<LabelType>& ids,
+                       Allocator* allocator) {
+    for (const auto& merge_unit : merge_units) {
+        auto stat_string = merge_unit.index->GetStats();
+        auto stats = JsonType::parse(stat_string);
+        std::string index_name = stats[STATSTIC_INDEX_NAME];
+        auto hnsw = std::dynamic_pointer_cast<HNSW>(merge_unit.index);
+        hnsw->ExtractDataAndGraph(data, graph, ids, merge_unit.id_map_func, allocator);
+    }
+}
+
+tl::expected<void, Error>
+HNSW::merge(const std::vector<MergeUnit>& merge_units) {
+    auto param = std::make_shared<FlattenDataCellParameter>();
+    param->io_parameter_ = std::make_shared<MemoryBlockIOParameter>();
+    param->quantizer_parameter_ = std::make_shared<FP32QuantizerParameter>();
+    GraphDataCellParamPtr graph_param_ptr = std::make_shared<GraphDataCellParameter>();
+    graph_param_ptr->io_parameter_ = std::make_shared<vsag::MemoryBlockIOParameter>();
+    graph_param_ptr->max_degree_ = max_degree_ * 2;
+
+    FlattenInterfacePtr flatten_interface =
+        FlattenInterface::MakeInstance(param, index_common_param_);
+    GraphInterfacePtr graph_interface =
+        GraphInterface::MakeInstance(graph_param_ptr, index_common_param_, false);
+    Vector<LabelType> ids(allocator_.get());
+    // extract data and graph
+    IdMapFunction id_map = [](int64_t id) -> std::tuple<bool, int64_t> {
+        return std::make_tuple(true, id);
+    };
+    this->ExtractDataAndGraph(flatten_interface, graph_interface, ids, id_map, allocator_.get());
+    extract_data_and_graph(merge_units, flatten_interface, graph_interface, ids, allocator_.get());
+    // TODO(inabao): merge graph
+    // set graph
+    SetDataAndGraph(flatten_interface, graph_interface, ids);
+    return {};
 }
 
 }  // namespace vsag

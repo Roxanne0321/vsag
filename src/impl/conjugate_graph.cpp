@@ -17,7 +17,8 @@
 
 namespace vsag {
 
-ConjugateGraph::ConjugateGraph() {
+ConjugateGraph::ConjugateGraph(Allocator* allocator)
+    : allocator_(allocator), conjugate_graph_(allocator) {
     clear();
 }
 
@@ -26,32 +27,39 @@ ConjugateGraph::AddNeighbor(int64_t from_tag_id, int64_t to_tag_id) {
     if (from_tag_id == to_tag_id) {
         return false;
     }
-    auto& neighbor_set = conjugate_graph_[from_tag_id];
-    if (neighbor_set.size() >= MAXIMUM_DEGREE) {
+
+    std::shared_ptr<UnorderedSet<int64_t>> neighbor_set;
+    auto search_key = conjugate_graph_.find(from_tag_id);
+    if (search_key == conjugate_graph_.end()) {
+        neighbor_set = std::make_shared<UnorderedSet<int64_t>>(allocator_);
+        conjugate_graph_.emplace(from_tag_id, neighbor_set);
+    } else {
+        neighbor_set = search_key->second;
+    }
+
+    if (neighbor_set->size() >= MAXIMUM_DEGREE) {
         return false;
     }
-    auto insert_result = neighbor_set.insert(to_tag_id);
+    auto insert_result = neighbor_set->insert(to_tag_id);
     if (!insert_result.second) {
         return false;
-    } else {
-        if (neighbor_set.size() == 1) {
-            memory_usage_ += sizeof(from_tag_id);
-            memory_usage_ += sizeof(neighbor_set.size());
-        }
-        memory_usage_ += sizeof(to_tag_id);
-        return true;
     }
+
+    if (neighbor_set->size() == 1) {
+        memory_usage_ += sizeof(from_tag_id);
+        memory_usage_ += sizeof(neighbor_set->size());
+    }
+    memory_usage_ += sizeof(to_tag_id);
+    return true;
 }
 
-const std::unordered_set<int64_t>&
+std::shared_ptr<UnorderedSet<int64_t>>
 ConjugateGraph::get_neighbors(int64_t from_tag_id) const {
-    static const std::unordered_set<int64_t> empty_set;
     auto iter = conjugate_graph_.find(from_tag_id);
-    if (iter != conjugate_graph_.end()) {
-        return iter->second;
-    } else {
-        return empty_set;
+    if (iter == conjugate_graph_.end()) {
+        return nullptr;
     }
+    return iter->second;
 }
 
 tl::expected<uint32_t, Error>
@@ -61,16 +69,16 @@ ConjugateGraph::EnhanceResult(std::priority_queue<std::pair<float, LabelType>>& 
         return 0;
     }
 
-    int64_t k = results.size();
+    auto k = static_cast<int64_t>(results.size());
     int64_t look_at_k = std::min(LOOK_AT_K, k);
     std::priority_queue<std::pair<float, LabelType>> old_results(results);
-    std::vector<int64_t> to_be_visited(look_at_k);
-    std::unordered_set<int64_t> visited_set;
+    Vector<int64_t> to_be_visited(look_at_k, allocator_);
+    UnorderedSet<int64_t> visited_set(allocator_);
     uint32_t successfully_enhanced = 0;
     float distance = 0;
 
     // initialize visited_set
-    for (int j = old_results.size() - 1; j >= 0; j--) {
+    for (auto j = static_cast<int64_t>(old_results.size() - 1); j >= 0; j--) {
         visited_set.insert(old_results.top().second);
         if (j < look_at_k) {
             to_be_visited[j] = old_results.top().second;
@@ -80,9 +88,13 @@ ConjugateGraph::EnhanceResult(std::priority_queue<std::pair<float, LabelType>>& 
 
     // add neighbors in conjugate graph to enhance result
     for (int j = 0; j < look_at_k; j++) {
-        const std::unordered_set<int64_t>& neighbors = get_neighbors(to_be_visited[j]);
+        auto neighbors = get_neighbors(to_be_visited[j]);
 
-        for (auto neighbor_tag_id : neighbors) {
+        if (neighbors == nullptr) {
+            continue;
+        }
+
+        for (auto neighbor_tag_id : *neighbors) {
             if (not visited_set.insert(neighbor_tag_id).second) {
                 continue;
             }
@@ -114,6 +126,7 @@ read_var_from_stream(StreamReader& in_stream, uint32_t* offset, T* dest) {
 void
 ConjugateGraph::clear() {
     memory_usage_ = sizeof(memory_usage_) + FOOTER_SIZE;
+    conjugate_graph_.clear();
     footer_.Clear();
 }
 
@@ -130,7 +143,7 @@ ConjugateGraph::Serialize() const {
     out_ss.seekg(0, std::ios_base::beg);
 
     std::shared_ptr<int8_t[]> data(new int8_t[size]);
-    out_ss.read(reinterpret_cast<char*>(data.get()), size);
+    out_ss.read(reinterpret_cast<char*>(data.get()), static_cast<int64_t>(size));
 
     Binary binary{.data = data, .size = size};
     return binary;
@@ -141,7 +154,7 @@ ConjugateGraph::Serialize(std::ostream& out_stream) const {
     out_stream.write((char*)&memory_usage_, sizeof(memory_usage_));
 
     for (auto item : conjugate_graph_) {
-        auto neighbor_set = item.second;
+        auto neighbor_set = *item.second;
         size_t neighbor_set_size = neighbor_set.size();
 
         out_stream.write((char*)&item.first, sizeof(item.first));
@@ -169,7 +182,8 @@ ConjugateGraph::Deserialize(const Binary& binary) {
 
     int64_t cursor = 0;
     ReadFuncStreamReader reader(func, cursor);
-    return this->Deserialize(reader);
+    BufferStreamReader buffer_reader(&reader, binary.size, allocator_);
+    return this->Deserialize(buffer_reader);
 }
 
 tl::expected<void, Error>
@@ -198,10 +212,15 @@ ConjugateGraph::Deserialize(StreamReader& in_stream) {
         in_stream.Seek(cur_pos + offset);
         while (offset != memory_usage_ - FOOTER_SIZE) {
             read_var_from_stream(in_stream, &offset, &from_tag_id);
+            if (conjugate_graph_.count(from_tag_id) == 0) {
+                conjugate_graph_.emplace(from_tag_id,
+                                         std::make_shared<UnorderedSet<int64_t>>(allocator_));
+            }
+
             read_var_from_stream(in_stream, &offset, &neighbor_size);
             for (int i = 0; i < neighbor_size; i++) {
                 read_var_from_stream(in_stream, &offset, &to_tag_id);
-                conjugate_graph_[from_tag_id].insert(to_tag_id);
+                conjugate_graph_[from_tag_id]->insert(to_tag_id);
             }
         }
 
@@ -215,6 +234,39 @@ ConjugateGraph::Deserialize(StreamReader& in_stream) {
 bool
 ConjugateGraph::is_empty() const {
     return (this->memory_usage_ == sizeof(this->memory_usage_) + FOOTER_SIZE);
+}
+
+tl::expected<bool, Error>
+ConjugateGraph::UpdateId(int64_t old_tag_id, int64_t new_tag_id) {
+    if (old_tag_id == new_tag_id) {
+        return true;
+    }
+
+    // 1. update key
+    bool updated = false;
+    auto it_old_key = conjugate_graph_.find(old_tag_id);
+    if (it_old_key != conjugate_graph_.end()) {
+        auto it_new_key = conjugate_graph_.find(new_tag_id);
+        if (it_new_key != conjugate_graph_.end()) {
+            // both two id exists in graph, note that this situation should be filtered out before use this function.
+            return false;
+        }
+        conjugate_graph_[new_tag_id] = std::move(it_old_key->second);
+        conjugate_graph_.erase(it_old_key);
+        updated = true;
+    }
+
+    // 2. update neighbors
+    for (auto& [key, neighbors] : conjugate_graph_) {
+        auto it_old_neighbor = neighbors->find(old_tag_id);
+        if (it_old_neighbor != neighbors->end()) {
+            neighbors->erase(it_old_neighbor);
+            neighbors->insert(new_tag_id);
+            updated = true;
+        }
+    }
+
+    return updated;
 }
 
 }  // namespace vsag

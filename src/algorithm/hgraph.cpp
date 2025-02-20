@@ -18,10 +18,12 @@
 #include <fmt/format-inl.h>
 
 #include <memory>
+#include <stdexcept>
 
 #include "common.h"
 #include "data_cell/sparse_graph_datacell.h"
-#include "index/hgraph_zparameters.h"
+#include "index/hgraph_index_zparameters.h"
+#include "logger.h"
 
 namespace vsag {
 static BinarySet
@@ -50,69 +52,32 @@ next_multiple_of_power_of_two(uint64_t x, uint64_t n) {
     return result;
 }
 
-HGraph::HGraph(const JsonType& index_param, const vsag::IndexCommonParam& common_param) noexcept
-    : index_param_(index_param),
-      common_param_(common_param),
+HGraph::HGraph(const HGraphParameter& hgraph_param, const vsag::IndexCommonParam& common_param)
+    : common_param_(common_param),
+      dim_(common_param.dim_),
+      metric_(common_param.metric_),
+      allocator_(common_param.allocator_.get()),
       label_lookup_(common_param.allocator_.get()),
       neighbors_mutex_(0, common_param.allocator_.get()),
       route_graphs_(common_param.allocator_.get()),
-      labels_(common_param.allocator_.get()) {
-    this->dim_ = common_param.dim_;
-    this->metric_ = common_param.metric_;
-    this->allocator_ = common_param.allocator_.get();
-}
-
-tl::expected<void, Error>
-HGraph::Init() {
-    try {
-        CHECK_ARGUMENT(this->index_param_.contains(HGRAPH_USE_REORDER_KEY),
-                       fmt::format("hgraph parameters must contains {}", HGRAPH_USE_REORDER_KEY));
-        this->use_reorder_ = this->index_param_[HGRAPH_USE_REORDER_KEY];
-
-        CHECK_ARGUMENT(this->index_param_.contains(HGRAPH_BASE_CODES_KEY),
-                       fmt::format("hgraph parameters must contains {}", HGRAPH_BASE_CODES_KEY));
-        const auto& base_codes_json_obj = this->index_param_[HGRAPH_BASE_CODES_KEY];
-        this->basic_flatten_codes_ =
-            FlattenInterface::MakeInstance(base_codes_json_obj, common_param_);
-
-        if (this->use_reorder_) {
-            CHECK_ARGUMENT(
-                this->index_param_.contains(HGRAPH_PRECISE_CODES_KEY),
-                fmt::format("hgraph parameters must contains {}", HGRAPH_PRECISE_CODES_KEY));
-            const auto& precise_codes_json_obj = this->index_param_[HGRAPH_PRECISE_CODES_KEY];
-            this->high_precise_codes_ =
-                FlattenInterface::MakeInstance(precise_codes_json_obj, common_param_);
-        }
-
-        CHECK_ARGUMENT(this->index_param_.contains(HGRAPH_GRAPH_KEY),
-                       fmt::format("hgraph parameters must contains {}", HGRAPH_GRAPH_KEY));
-        const auto& graph_json_obj = this->index_param_[HGRAPH_GRAPH_KEY];
-        this->bottom_graph_ = GraphInterface::MakeInstance(graph_json_obj, common_param_);
-
-        mult_ = 1 / log(1.0 * static_cast<double>(this->bottom_graph_->MaximumDegree()));
-
-        resize(bottom_graph_->max_capacity_);
-
-        if (this->index_param_.contains(BUILD_PARAMS_KEY)) {
-            auto& build_params = this->index_param_[BUILD_PARAMS_KEY];
-            if (build_params.contains(BUILD_EF_CONSTRUCTION)) {
-                this->ef_construct_ = build_params[BUILD_EF_CONSTRUCTION];
-            }
-            if (build_params.contains(BUILD_THREAD_COUNT)) {
-                this->build_thread_count_ = build_params[BUILD_THREAD_COUNT];
-            }
-        }
-
-        if (this->build_thread_count_ > 1) {
-            this->build_pool_ = std::make_unique<progschj::ThreadPool>(this->build_thread_count_);
-        }
-
-        this->init_features();
-    } catch (const std::invalid_argument& e) {
-        LOG_ERROR_AND_RETURNS(
-            ErrorType::INVALID_ARGUMENT, "failed to init(invalid argument): ", e.what());
+      labels_(common_param.allocator_.get()),
+      use_reorder_(hgraph_param.use_reorder_),
+      ef_construct_(hgraph_param.ef_construction_),
+      build_thread_count_(hgraph_param.build_thread_count_) {
+    this->basic_flatten_codes_ =
+        FlattenInterface::MakeInstance(hgraph_param.base_codes_param_, common_param);
+    if (use_reorder_) {
+        this->high_precise_codes_ =
+            FlattenInterface::MakeInstance(hgraph_param.precise_codes_param_, common_param);
     }
-    return {};
+    this->bottom_graph_ =
+        GraphInterface::MakeInstance(hgraph_param.bottom_graph_param_, common_param);
+    mult_ = 1 / log(1.0 * static_cast<double>(this->bottom_graph_->MaximumDegree()));
+    resize(bottom_graph_->max_capacity_);
+    if (this->build_thread_count_ > 1) {
+        this->build_pool_ = std::make_unique<progschj::ThreadPool>(this->build_thread_count_);
+    }
+    this->init_features();
 }
 
 tl::expected<std::vector<int64_t>, Error>
@@ -175,7 +140,7 @@ HGraph::KnnSearch(const DatasetPtr& query,
         search_param.ep_ = this->entry_point_id_;
         search_param.ef_ = 1;
         search_param.is_id_allowed_ = nullptr;
-        for (int64_t i = this->route_graphs_.size() - 1; i >= 0; --i) {
+        for (auto i = static_cast<int64_t>(this->route_graphs_.size() - 1); i >= 0; --i) {
             auto result = this->search_one_graph(query->GetFloat32Vectors(),
                                                  this->route_graphs_[i],
                                                  this->basic_flatten_codes_,
@@ -200,15 +165,24 @@ HGraph::KnnSearch(const DatasetPtr& query,
             search_result.pop();
         }
 
+        // return an empty dataset directly if searcher returns nothing
+        if (search_result.empty()) {
+            auto result = Dataset::Make();
+            result->Dim(0)->NumElements(1);
+            return result;
+        }
+
         auto dataset_results = Dataset::Make();
-        dataset_results->Dim(search_result.size())->NumElements(1)->Owner(true, allocator_);
+        dataset_results->Dim(static_cast<int64_t>(search_result.size()))
+            ->NumElements(1)
+            ->Owner(true, allocator_);
 
         auto* ids = (int64_t*)allocator_->Allocate(sizeof(int64_t) * search_result.size());
         dataset_results->Ids(ids);
         auto* dists = (float*)allocator_->Allocate(sizeof(float) * search_result.size());
         dataset_results->Distances(dists);
 
-        for (int64_t j = search_result.size() - 1; j >= 0; --j) {
+        for (auto j = static_cast<int64_t>(search_result.size() - 1); j >= 0; --j) {
             dists[j] = search_result.top().first;
             ids[j] = this->labels_.at(search_result.top().second);
             search_result.pop();
@@ -222,7 +196,7 @@ HGraph::KnnSearch(const DatasetPtr& query,
 }
 
 uint64_t
-HGraph::EstimateMemory(const uint64_t num_elements) const {
+HGraph::EstimateMemory(uint64_t num_elements) const {
     uint64_t estimate_memory = 0;
     auto block_size = Options::Instance().block_size_limit();
     auto element_count =
@@ -250,9 +224,10 @@ HGraph::EstimateMemory(const uint64_t num_elements) const {
         element_count * (sizeof(std::pair<LabelType, InnerIdType>) + 2 * sizeof(void*));
     estimate_memory += label_map_memory;
 
-    auto sparse_graph_memory = (this->mult_ * 0.05 * element_count) * sizeof(InnerIdType) *
-                               (this->bottom_graph_->maximum_degree_ / 2 + 1);
-    estimate_memory += sparse_graph_memory;
+    auto sparse_graph_memory = (this->mult_ * 0.05 * static_cast<double>(element_count)) *
+                               sizeof(InnerIdType) *
+                               (static_cast<double>(this->bottom_graph_->maximum_degree_) / 2 + 1);
+    estimate_memory += static_cast<uint64_t>(sparse_graph_memory);
 
     auto other_memory = element_count * (sizeof(LabelType) + sizeof(std::shared_mutex));
     estimate_memory += other_memory;
@@ -269,7 +244,7 @@ HGraph::Serialize() const {
     size_t num_bytes = this->cal_serialize_size();
     try {
         std::shared_ptr<int8_t[]> bin(new int8_t[num_bytes]);
-        auto buffer = reinterpret_cast<char*>(const_cast<int8_t*>(bin.get()));
+        auto* buffer = reinterpret_cast<char*>(const_cast<int8_t*>(bin.get()));
         BufferStreamWriter writer(buffer);
         this->Serialize(writer);
         Binary b{
@@ -311,8 +286,8 @@ HGraph::Deserialize(const ReaderSet& reader_set) {
 void
 HGraph::hnsw_add(const DatasetPtr& data) {
     uint64_t total = data->GetNumElements();
-    auto* ids = data->GetIds();
-    auto* datas = data->GetFloat32Vectors();
+    const auto* ids = data->GetIds();
+    const auto* datas = data->GetFloat32Vectors();
     auto cur_count = this->bottom_graph_->TotalCount();
     this->resize(total + cur_count);
 
@@ -332,7 +307,8 @@ HGraph::hnsw_add(const DatasetPtr& data) {
             std::unique_lock<std::mutex> add_lock(add_mutex);
             if (level >= int64_t(this->max_level_) || bottom_graph_->TotalCount() == 0) {
                 std::lock_guard<std::shared_mutex> wlock(this->global_mutex_);
-                for (int64_t j = max_level_; j <= level; ++j) {
+                // level maybe a negative number(-1)
+                for (auto j = static_cast<int64_t>(max_level_); j <= level; ++j) {
                     this->route_graphs_.emplace_back(this->generate_one_route_graph());
                 }
                 max_level_ = level + 1;
@@ -366,7 +342,7 @@ HGraph::generate_one_route_graph() {
 }
 
 template <HGraph::InnerSearchMode mode>
-HGraph::MaxHeap
+MaxHeap
 HGraph::search_one_graph(const float* query,
                          const GraphInterfacePtr& graph,
                          const FlattenInterfacePtr& flatten,
@@ -384,7 +360,7 @@ HGraph::search_one_graph(const float* query,
 
     MaxHeap candidate_set(allocator_);
     MaxHeap cur_result(allocator_);
-    float dist = 0.0f;
+    float dist = 0.0F;
     auto lower_bound = std::numeric_limits<float>::max();
     flatten->Query(&dist, computer, &ep, 1);
     if (not is_id_allowed || (*is_id_allowed)(get_label_by_id(ep))) {
@@ -428,7 +404,7 @@ HGraph::search_one_graph(const float* query,
 #endif
         }
         auto count_no_visited = 0;
-        for (uint64_t i = 0; i < neighbors.size(); ++i) {
+        for (uint64_t i = 0; i < neighbors.size(); ++i) {  // NOLINT(modernize-loop-convert)
             const auto& neighbor = neighbors[i];
 #if defined(USE_SSE)
             if (i + prefetch_neighbor_visit_num < neighbors.size()) {
@@ -496,7 +472,7 @@ HGraph::RangeSearch(const DatasetPtr& query,
         InnerSearchParam search_param;
         search_param.ep_ = this->entry_point_id_;
         search_param.ef_ = 1;
-        for (int64_t i = this->route_graphs_.size() - 1; i >= 0; --i) {
+        for (auto i = static_cast<int64_t>(this->route_graphs_.size() - 1); i >= 0; --i) {
             auto result = this->search_one_graph(query->GetFloat32Vectors(),
                                                  this->route_graphs_[i],
                                                  this->basic_flatten_codes_,
@@ -525,13 +501,15 @@ HGraph::RangeSearch(const DatasetPtr& query,
         }
 
         auto dataset_results = Dataset::Make();
-        dataset_results->Dim(search_result.size())->NumElements(1)->Owner(true, allocator_);
+        dataset_results->Dim(static_cast<int64_t>(search_result.size()))
+            ->NumElements(1)
+            ->Owner(true, allocator_);
         auto* ids = (int64_t*)allocator_->Allocate(sizeof(int64_t) * search_result.size());
         dataset_results->Ids(ids);
         auto* dists = (float*)allocator_->Allocate(sizeof(float) * search_result.size());
         dataset_results->Distances(dists);
 
-        for (int64_t j = search_result.size() - 1; j >= 0; --j) {
+        for (auto j = static_cast<int64_t>(search_result.size() - 1); j >= 0; --j) {
             dists[j] = search_result.top().first;
             ids[j] = this->labels_.at(search_result.top().second);
             search_result.pop();
@@ -545,7 +523,7 @@ HGraph::RangeSearch(const DatasetPtr& query,
 }
 
 void
-HGraph::select_edges_by_heuristic(HGraph::MaxHeap& edges,
+HGraph::select_edges_by_heuristic(MaxHeap& edges,
                                   uint64_t max_size,
                                   const FlattenInterfacePtr& flatten) {
     if (edges.size() < max_size) {
@@ -560,8 +538,9 @@ HGraph::select_edges_by_heuristic(HGraph::MaxHeap& edges,
     }
 
     while (not queue_closest.empty()) {
-        if (return_list.size() >= max_size)
+        if (return_list.size() >= max_size) {
             break;
+        }
         std::pair<float, InnerIdType> curent_pair = queue_closest.top();
         float float_query = -curent_pair.first;
         queue_closest.pop();
@@ -592,9 +571,10 @@ HGraph::mutually_connect_new_element(InnerIdType cur_c,
                                      bool is_update) {
     const size_t max_size = graph->MaximumDegree();
     this->select_edges_by_heuristic(top_candidates, max_size, flatten);
-    if (top_candidates.size() > max_size)
+    if (top_candidates.size() > max_size) {
         throw std::runtime_error(
             "Should be not be more than max_size candidates returned by the heuristic");
+    }
 
     Vector<InnerIdType> selected_neighbors(allocator_);
     selected_neighbors.reserve(max_size);
@@ -622,10 +602,12 @@ HGraph::mutually_connect_new_element(InnerIdType cur_c,
 
         size_t sz_link_list_other = neighbors.size();
 
-        if (sz_link_list_other > max_size)
+        if (sz_link_list_other > max_size) {
             throw std::runtime_error("Bad value of sz_link_list_other");
-        if (selected_neighbor == cur_c)
+        }
+        if (selected_neighbor == cur_c) {
             throw std::runtime_error("Trying to connect an element to itself");
+        }
 
         bool is_cur_c_present = false;
         if (is_update) {
@@ -682,7 +664,7 @@ HGraph::serialize_basic_info(StreamWriter& writer) const {
 
     uint64_t size = this->label_lookup_.size();
     StreamWriter::WriteObj(writer, size);
-    for (auto& pair : this->label_lookup_) {
+    for (const auto& pair : this->label_lookup_) {
         auto key = pair.first;
         StreamWriter::WriteObj(writer, key);
         StreamWriter::WriteObj(writer, pair.second);
@@ -766,7 +748,7 @@ HGraph::Serialize(std::ostream& out_stream) const {
 
 tl::expected<void, Error>
 HGraph::Deserialize(const BinarySet& binary_set) {
-    SlowTaskTimer t("hnsw Deserialize");
+    SlowTaskTimer t("hgraph Deserialize");
     if (this->GetNumElements() > 0) {
         LOG_ERROR_AND_RETURNS(ErrorType::INDEX_NOT_EMPTY,
                               "failed to Deserialize: index is not empty");
@@ -817,19 +799,18 @@ HGraph::CalculateDistanceById(const float* vector, int64_t id) const {
     if (use_reorder_) {
         flat = this->high_precise_codes_;
     }
-    float result = 0.0f;
+    float result = 0.0F;
     auto computer = flat->FactoryComputer(vector);
     {
         std::shared_lock<std::shared_mutex> lock(this->label_lookup_mutex_);
         auto iter = this->label_lookup_.find(id);
-        if (iter != this->label_lookup_.end()) {
-            auto new_id = iter->second;
-            flat->Query(&result, computer, &new_id, 1);
-            return result;
-        } else {
+        if (iter == this->label_lookup_.end()) {
             LOG_ERROR_AND_RETURNS(ErrorType::INVALID_ARGUMENT,
                                   fmt::format("failed to find id: {}", id));
         }
+        auto new_id = iter->second;
+        flat->Query(&result, computer, &new_id, 1);
+        return result;
     }
 }
 void
@@ -876,7 +857,7 @@ HGraph::add_one_point(const float* data, int level, InnerIdType inner_id) {
 void
 HGraph::resize(uint64_t new_size) {
     auto cur_size = this->neighbors_mutex_.size();
-    auto new_size_power_2 =
+    uint64_t new_size_power_2 =
         next_multiple_of_power_of_two(new_size, this->resize_increase_count_bit_);
     if (cur_size < new_size_power_2) {
         vsag::Vector<std::shared_mutex>(new_size_power_2, allocator_).swap(this->neighbors_mutex_);
@@ -889,19 +870,34 @@ HGraph::resize(uint64_t new_size) {
 void
 HGraph::init_features() {
     // Common Init
-    feature_list_.SetFeatures({IndexFeature::SUPPORT_BUILD,
-                               IndexFeature::SUPPORT_BUILD_WITH_MULTI_THREAD,
-                               IndexFeature::SUPPORT_ADD_AFTER_BUILD,
-                               IndexFeature::SUPPORT_KNN_SEARCH,
-                               IndexFeature::SUPPORT_RANGE_SEARCH,
-                               IndexFeature::SUPPORT_KNN_SEARCH_WITH_ID_FILTER,
-                               IndexFeature::SUPPORT_RANGE_SEARCH_WITH_ID_FILTER,
-                               IndexFeature::SUPPORT_SEARCH_CONCURRENT,
-                               IndexFeature::SUPPORT_DESERIALIZE_BINARY_SET,
-                               IndexFeature::SUPPORT_DESERIALIZE_FILE,
-                               IndexFeature::SUPPORT_DESERIALIZE_READER_SET,
-                               IndexFeature::SUPPORT_SERIALIZE_BINARY_SET,
-                               IndexFeature::SUPPORT_SERIALIZE_FILE});
+    // Build & Add
+    feature_list_.SetFeatures({
+        IndexFeature::SUPPORT_BUILD,
+        IndexFeature::SUPPORT_BUILD_WITH_MULTI_THREAD,
+        IndexFeature::SUPPORT_ADD_AFTER_BUILD,
+    });
+    // search
+    feature_list_.SetFeatures({
+        IndexFeature::SUPPORT_KNN_SEARCH,
+        IndexFeature::SUPPORT_RANGE_SEARCH,
+        IndexFeature::SUPPORT_KNN_SEARCH_WITH_ID_FILTER,
+        IndexFeature::SUPPORT_RANGE_SEARCH_WITH_ID_FILTER,
+    });
+    // concurrency
+    feature_list_.SetFeature(IndexFeature::SUPPORT_SEARCH_CONCURRENT);
+    // serialize
+    feature_list_.SetFeatures({
+        IndexFeature::SUPPORT_DESERIALIZE_BINARY_SET,
+        IndexFeature::SUPPORT_DESERIALIZE_FILE,
+        IndexFeature::SUPPORT_DESERIALIZE_READER_SET,
+        IndexFeature::SUPPORT_SERIALIZE_BINARY_SET,
+        IndexFeature::SUPPORT_SERIALIZE_FILE,
+    });
+    // other
+    feature_list_.SetFeatures({
+        IndexFeature::SUPPORT_ESTIMATE_MEMORY,
+        IndexFeature::SUPPORT_CHECK_ID_EXIST,
+    });
 
     // About Train
     auto name = this->basic_flatten_codes_->GetQuantizerName();
@@ -931,8 +927,8 @@ HGraph::split_dataset_by_duplicate_label(const DatasetPtr& dataset,
     Vector<DatasetPtr> return_datasets(0, this->allocator_);
     auto count = dataset->GetNumElements();
     auto dim = dataset->GetDim();
-    auto* labels = dataset->GetIds();
-    auto* vec = dataset->GetFloat32Vectors();
+    const auto* labels = dataset->GetIds();
+    const auto* vec = dataset->GetFloat32Vectors();
     UnorderedSet<LabelType> temp_labels(allocator_);
 
     for (uint64_t i = 0; i < count; ++i) {

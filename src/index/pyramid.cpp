@@ -17,9 +17,21 @@
 
 namespace vsag {
 
-// Function to convert BinarySet to a Binary
 Binary
 binaryset_to_binary(const BinarySet binary_set) {
+    /*
+     * The serialized layout of the Binary data in memory will be as follows:
+     * | key_size_0 | key_0 (L_0 bytes) | binary_size_0 | binary_data_0 (S_0 bytes) |
+     * | key_size_1 | key_1 (L_1 bytes) | binary_size_1 | binary_data_1 (S_1 bytes) |
+     * | ...         | ...               | ...            | ...                        |
+     * | key_size_(N-1) | key_(N-1) (L_(N-1) bytes) | binary_size_(N-1) | binary_data_(N-1) (S_(N-1) bytes) |
+     * Where:
+     * - `key_size_k`: size of the k-th key (in bytes)
+     * - `key_k`: the actual k-th key data (length L_k)
+     * - `binary_size_k`: size of the binary data associated with the k-th key (in bytes)
+     * - `binary_data_k`: the actual binary data contents (length S_k)
+     * - N: total number of keys in the BinarySet
+     */
     size_t total_size = 0;
     auto keys = binary_set.GetKeys();
 
@@ -54,6 +66,12 @@ binaryset_to_binary(const BinarySet binary_set) {
 
 BinarySet
 binary_to_binaryset(const Binary binary) {
+    /*
+     * The Binary structure is serialized in the following layout:
+     * | key_size (sizeof(size_t)) | key (of length key_size) | binary_size (sizeof(size_t)) | binary data (of length binary_size) |
+     * Each key and its associated binary data are sequentially stored in the Binary object's data array,
+     * and this information guides the deserialization process here.
+    */
     BinarySet binary_set;
     size_t offset = 0;
 
@@ -99,10 +117,10 @@ reader_to_readerset(std::shared_ptr<Reader> reader) {
         reader->Read(offset, sizeof(size_t), &binary_size);
         offset += sizeof(size_t);
 
-        auto new_eader = std::make_shared<SubReader>(reader, offset, binary_size);
+        auto new_reader = std::make_shared<SubReader>(reader, offset, binary_size);
         offset += binary_size;
 
-        reader_set.Set(key, new_eader);
+        reader_set.Set(key, new_reader);
     }
 
     return reader_set;
@@ -145,11 +163,11 @@ Pyramid::Build(const DatasetPtr& base) {
 
 tl::expected<std::vector<int64_t>, Error>
 Pyramid::Add(const DatasetPtr& base) {
-    auto path = base->GetPaths();
+    const auto* path = base->GetPaths();
     int64_t data_num = base->GetNumElements();
     int64_t data_dim = base->GetDim();
-    auto data_ids = base->GetIds();
-    auto data_vectors = base->GetFloat32Vectors();
+    const auto* data_ids = base->GetIds();
+    const auto* data_vectors = base->GetFloat32Vectors();
     for (int i = 0; i < data_num; ++i) {
         std::string current_path = path[i];
         auto path_slices = split(current_path, PART_SLASH);
@@ -176,11 +194,11 @@ Pyramid::Add(const DatasetPtr& base) {
 }
 
 tl::expected<DatasetPtr, Error>
-Pyramid::KnnSearch(const DatasetPtr& query,
-                   int64_t k,
-                   const std::string& parameters,
-                   BitsetPtr invalid) const {
-    auto path = query->GetPaths();  // TODO(inabao): provide different search modes.
+Pyramid::knn_search(const DatasetPtr& query,
+                    int64_t k,
+                    const std::string& parameters,
+                    const SearchFunc& search_func) const {
+    const auto* path = query->GetPaths();  // TODO(inabao): provide different search modes.
 
     std::string current_path = path[0];
     auto path_slices = split(current_path, PART_SLASH);
@@ -197,9 +215,8 @@ Pyramid::KnnSearch(const DatasetPtr& query,
             auto ret = Dataset::Make();
             ret->Dim(0)->NumElements(1);
             return ret;
-        } else {
-            root = root_iter->second;
         }
+        root = root_iter->second;
     }
     Deque<std::shared_ptr<IndexNode>> candidate_indexes(commom_param_.allocator_.get());
 
@@ -209,7 +226,7 @@ Pyramid::KnnSearch(const DatasetPtr& query,
         auto node = candidate_indexes.front();
         candidate_indexes.pop_front();
         if (node->index) {
-            auto result = node->index->KnnSearch(query, k, parameters, invalid);
+            auto result = search_func(node->index);
             if (result.has_value()) {
                 DatasetPtr r = result.value();
                 for (int i = 0; i < r->GetDim(); ++i) {
@@ -232,16 +249,18 @@ Pyramid::KnnSearch(const DatasetPtr& query,
     // return result
     auto result = Dataset::Make();
     size_t target_size = results.size();
-    if (results.size() == 0) {
+    if (results.empty()) {
         result->Dim(0)->NumElements(1);
         return result;
     }
-    result->Dim(target_size)->NumElements(1)->Owner(true, commom_param_.allocator_.get());
-    int64_t* ids = (int64_t*)commom_param_.allocator_->Allocate(sizeof(int64_t) * target_size);
+    result->Dim(static_cast<int64_t>(target_size))
+        ->NumElements(1)
+        ->Owner(true, commom_param_.allocator_.get());
+    auto* ids = (int64_t*)commom_param_.allocator_->Allocate(sizeof(int64_t) * target_size);
     result->Ids(ids);
-    float* dists = (float*)commom_param_.allocator_->Allocate(sizeof(float) * target_size);
+    auto* dists = (float*)commom_param_.allocator_->Allocate(sizeof(float) * target_size);
     result->Distances(dists);
-    for (int64_t j = results.size() - 1; j >= 0; --j) {
+    for (auto j = static_cast<int64_t>(results.size() - 1); j >= 0; --j) {
         if (j < target_size) {
             dists[j] = results.top().first;
             ids[j] = results.top().second;
@@ -249,40 +268,6 @@ Pyramid::KnnSearch(const DatasetPtr& query,
         results.pop();
     }
     return result;
-}
-
-tl::expected<DatasetPtr, Error>
-Pyramid::KnnSearch(const DatasetPtr& query,
-                   int64_t k,
-                   const std::string& parameters,
-                   const std::function<bool(int64_t)>& filter) const {
-    return {};
-}
-
-tl::expected<DatasetPtr, Error>
-Pyramid::RangeSearch(const DatasetPtr& query,
-                     float radius,
-                     const std::string& parameters,
-                     int64_t limited_size) const {
-    return {};
-}
-
-tl::expected<DatasetPtr, Error>
-Pyramid::RangeSearch(const DatasetPtr& query,
-                     float radius,
-                     const std::string& parameters,
-                     BitsetPtr invalid,
-                     int64_t limited_size) const {
-    return {};
-}
-
-tl::expected<DatasetPtr, Error>
-Pyramid::RangeSearch(const DatasetPtr& query,
-                     float radius,
-                     const std::string& parameters,
-                     const std::function<bool(int64_t)>& filter,
-                     int64_t limited_size) const {
-    return {};
 }
 
 tl::expected<BinarySet, Error>
@@ -329,6 +314,17 @@ Pyramid::Deserialize(const BinarySet& binary_set) {
 
 tl::expected<void, Error>
 Pyramid::Deserialize(const ReaderSet& reader_set) {
+    auto keys = reader_set.GetKeys();
+    for (const auto& path : keys) {
+        const auto& reader = reader_set.Get(path);
+        auto path_slices = split(path, PART_OCTOTHORPE);
+        std::shared_ptr<IndexNode> node = try_get_node_with_init(indexes_, path_slices[0]);
+        for (int j = 1; j < path_slices.size(); ++j) {
+            node = try_get_node_with_init(node->children, path_slices[j]);
+        }
+        node->CreateIndex(pyramid_param_.index_builder);
+        node->index->Deserialize(reader_to_readerset(reader));
+    }
     return {};
 }
 

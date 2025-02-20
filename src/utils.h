@@ -31,7 +31,7 @@
 namespace vsag {
 
 struct SlowTaskTimer {
-    explicit SlowTaskTimer(const std::string& name, int64_t log_threshold_ms = 0);
+    explicit SlowTaskTimer(std::string name, int64_t log_threshold_ms = 0);
     ~SlowTaskTimer();
 
     std::string name;
@@ -51,13 +51,8 @@ class WindowResultQueue {
 public:
     WindowResultQueue();
 
-    explicit WindowResultQueue(size_t window_size);
-
     void
     Push(float value);
-
-    size_t
-    ResizeWindowSize(size_t new_window_size_);
 
     [[nodiscard]] float
     GetAvgResult() const;

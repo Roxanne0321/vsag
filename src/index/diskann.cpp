@@ -27,6 +27,10 @@
 #include <stdexcept>
 #include <utility>
 
+#include "data_cell/flatten_datacell.h"
+#include "impl/odescent_graph_builder.h"
+#include "io/memory_io_parameter.h"
+#include "quantization/fp32_quantizer_parameter.h"
 #include "vsag/constants.h"
 #include "vsag/errors.h"
 #include "vsag/expected.hpp"
@@ -78,19 +82,23 @@ public:
         size_ = file_.tellg();
     }
 
-    ~LocalMemoryReader() = default;
+    ~LocalMemoryReader() override = default;
 
-    virtual void
+    void
     Read(uint64_t offset, uint64_t len, void* dest) override {
         std::lock_guard<std::mutex> lock(mutex_);
-        file_.seekg(offset, std::ios::beg);
-        file_.read((char*)dest, len);
+        file_.seekg(static_cast<int64_t>(offset), std::ios::beg);
+        file_.read((char*)dest, static_cast<int64_t>(len));
     }
 
-    virtual void
+    void
     AsyncRead(uint64_t offset, uint64_t len, void* dest, CallBack callback) override {
         if (pool_) {
-            pool_->GeneralEnqueue([this, offset, len, dest, callback]() {
+            pool_->GeneralEnqueue([this,  // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+                                   offset,
+                                   len,
+                                   dest,
+                                   callback]() {
                 this->Read(offset, len, dest);
                 callback(IOErrorCode::IO_SUCCESS, "success");
             });
@@ -99,7 +107,7 @@ public:
         }
     }
 
-    virtual uint64_t
+    uint64_t
     Size() const override {
         return size_;
     }
@@ -114,8 +122,9 @@ private:
 Binary
 convert_stream_to_binary(const std::stringstream& stream) {
     std::streambuf* buf = stream.rdbuf();
-    std::streamsize size = buf->pubseekoff(0, stream.end, stream.in);  // get the stream buffer size
-    buf->pubseekpos(0, stream.in);                                     // reset pointer pos
+    std::streamsize size = buf->pubseekoff(
+        0, std::stringstream::end, std::stringstream::in);  // get the stream buffer size
+    buf->pubseekpos(0, std::stringstream::in);              // reset pointer pos
     std::shared_ptr<int8_t[]> binary_data(new int8_t[size]);
     buf->sgetn((char*)binary_data.get(), size);
     Binary binary{
@@ -129,14 +138,14 @@ void
 convert_binary_to_stream(const Binary& binary, std::stringstream& stream) {
     stream.str("");
     if (binary.data && binary.size > 0) {
-        stream.write((const char*)binary.data.get(), binary.size);
+        stream.write((const char*)binary.data.get(), static_cast<int64_t>(binary.size));
     }
 }
 
 DiskANN::DiskANN(DiskannParameters& diskann_params, const IndexCommonParam& index_common_param)
     : metric_(diskann_params.metric),
-      L_(diskann_params.ef_construction),
-      R_(diskann_params.max_degree),
+      L_(static_cast<int32_t>(diskann_params.ef_construction)),
+      R_(static_cast<int32_t>(diskann_params.max_degree)),
       p_val_(diskann_params.pq_sample_rate),
       disk_pq_dims_(diskann_params.pq_dims),
       dim_(index_common_param.dim_),
@@ -145,7 +154,8 @@ DiskANN::DiskANN(DiskannParameters& diskann_params, const IndexCommonParam& inde
       use_opq_(diskann_params.use_opq),
       use_bsa_(diskann_params.use_bsa),
       use_async_io_(diskann_params.use_async_io),
-      index_common_param_(index_common_param) {
+      diskann_params_(diskann_params),
+      common_param_(index_common_param) {
     if (not use_async_io_) {
         pool_ = index_common_param_.thread_pool_;
     }
@@ -183,10 +193,12 @@ DiskANN::DiskANN(DiskannParameters& diskann_params, const IndexCommonParam& inde
     R_ = std::min(MAXIMAL_R, std::max(MINIMAL_R, R_));
 
     // When the length of the vector is too long, set sector_len_ to the size of storing a vector along with its linkage list.
-    sector_len_ =
-        std::max(MINIMAL_SECTOR_LEN,
-                 (size_t)(dim_ * sizeof(float) + (R_ * GRAPH_SLACK + 1) * sizeof(uint32_t)) *
-                     VECTOR_PER_BLOCK);
+    sector_len_ = std::max(
+        MINIMAL_SECTOR_LEN,
+        (size_t)(static_cast<uint64_t>(dim_) * sizeof(float) +
+                 static_cast<uint64_t>(std::ceil(static_cast<float>(R_) * GRAPH_SLACK + 1)) *
+                     sizeof(uint32_t)) *
+            VECTOR_PER_BLOCK);
 }
 
 tl::expected<std::vector<int64_t>, Error>
@@ -207,14 +219,38 @@ DiskANN::build(const DatasetPtr& base) {
             LOG_ERROR_AND_RETURNS(ErrorType::BUILD_TWICE, "failed to build index: build twice");
         }
 
-        auto vectors = base->GetFloat32Vectors();
-        auto ids = base->GetIds();
+        const auto* vectors = base->GetFloat32Vectors();
+        const auto* ids = base->GetIds();
         auto data_num = base->GetNumElements();
         CHECK_ARGUMENT(data_num > 1,
                        fmt::format("base.num_elements({}) must be greater than 1", data_num));
 
         std::vector<size_t> failed_locs;
-        {
+        if (diskann_params_.graph_type == DISKANN_GRAPH_TYPE_ODESCENT) {
+            SlowTaskTimer t("odescent build full (graph)");
+            FlattenDataCellParamPtr flatten_param =
+                std::make_shared<vsag::FlattenDataCellParameter>();
+            flatten_param->quantizer_parameter_ = std::make_shared<FP32QuantizerParameter>();
+            flatten_param->io_parameter_ = std::make_shared<MemoryIOParameter>();
+            vsag::FlattenInterfacePtr flatten_interface_ptr =
+                vsag::FlattenInterface::MakeInstance(flatten_param, this->common_param_);
+            flatten_interface_ptr->Train(vectors, data_num);
+            flatten_interface_ptr->BatchInsertVector(vectors, data_num);
+            vsag::ODescent graph(2LL * R_,
+                                 diskann_params_.alpha,
+                                 diskann_params_.turn,
+                                 diskann_params_.sample_rate,
+                                 flatten_interface_ptr,
+                                 common_param_.allocator_.get(),
+                                 common_param_.thread_pool_.get());
+            graph.Build();
+            graph.SaveGraph(graph_stream_);
+            auto data_num_int32 = static_cast<int32_t>(data_num);
+            auto data_dim_int32 = static_cast<int32_t>(data_dim);
+            tag_stream_.write((char*)&data_num_int32, sizeof(data_num_int32));
+            tag_stream_.write((char*)&data_dim_int32, sizeof(data_dim_int32));
+            tag_stream_.write((char*)ids, static_cast<std::streamsize>(data_num * sizeof(ids)));
+        } else if (diskann_params_.graph_type == DISKANN_GRAPH_TYPE_VAMANA) {
             SlowTaskTimer t("diskann build full (graph)");
             // build graph
             build_index_ = std::make_shared<diskann::Index<float, int64_t, int64_t>>(
@@ -352,8 +388,8 @@ DiskANN::knn_search(const DatasetPtr& query,
         beam_search = std::max(beam_search, MINIMAL_BEAM_SEARCH);
 
         uint64_t labels[query_num * k];
-        auto distances = new float[query_num * k];
-        auto ids = new int64_t[query_num * k];
+        auto* distances = new float[query_num * k];
+        auto* ids = new int64_t[query_num * k];
         diskann::QueryStats query_stats[query_num];
         for (int i = 0; i < query_num; i++) {
             try {
@@ -402,10 +438,11 @@ DiskANN::knn_search(const DatasetPtr& query,
                 }
                 {
                     std::lock_guard<std::mutex> lock(stats_mutex_);
-                    result_queues_[STATSTIC_KNN_IO].Push(query_stats[i].n_ios);
-                    result_queues_[STATSTIC_KNN_TIME].Push(time_cost);
+                    result_queues_[STATSTIC_KNN_IO].Push(static_cast<float>(query_stats[i].n_ios));
+                    result_queues_[STATSTIC_KNN_TIME].Push(static_cast<float>(time_cost));
                     result_queues_[STATSTIC_KNN_IO_TIME].Push(
-                        (query_stats[i].io_us / query_stats[i].n_ios) / MACRO_TO_MILLI);
+                        (query_stats[i].io_us / static_cast<float>(query_stats[i].n_ios)) /
+                        MACRO_TO_MILLI);
                 }
 
             } catch (const std::runtime_error& e) {
@@ -535,19 +572,20 @@ DiskANN::range_search(const DatasetPtr& query,
             {
                 std::lock_guard<std::mutex> lock(stats_mutex_);
 
-                result_queues_[STATSTIC_RANGE_IO].Push(query_stats.n_ios);
-                result_queues_[STATSTIC_RANGE_HOP].Push(query_stats.n_hops);
-                result_queues_[STATSTIC_RANGE_TIME].Push(time_cost);
-                result_queues_[STATSTIC_RANGE_CACHE_HIT].Push(query_stats.n_cache_hits);
+                result_queues_[STATSTIC_RANGE_IO].Push(static_cast<float>(query_stats.n_ios));
+                result_queues_[STATSTIC_RANGE_HOP].Push(static_cast<float>(query_stats.n_hops));
+                result_queues_[STATSTIC_RANGE_TIME].Push(static_cast<float>(time_cost));
+                result_queues_[STATSTIC_RANGE_CACHE_HIT].Push(
+                    static_cast<float>(query_stats.n_cache_hits));
                 result_queues_[STATSTIC_RANGE_IO_TIME].Push(
-                    (query_stats.io_us / query_stats.n_ios) / MACRO_TO_MILLI);
+                    (query_stats.io_us / static_cast<float>(query_stats.n_ios)) / MACRO_TO_MILLI);
             }
         } catch (const std::runtime_error& e) {
             LOG_ERROR_AND_RETURNS(
                 ErrorType::INTERNAL_ERROR, "failed to perform range search on diskann: ", e.what());
         }
 
-        int64_t k = labels.size();
+        auto k = static_cast<int64_t>(labels.size());
         size_t target_size = k;
 
         auto result = Dataset::Make();
@@ -558,14 +596,17 @@ DiskANN::range_search(const DatasetPtr& query,
             target_size = std::min((size_t)limited_size, target_size);
         }
 
-        auto dis = new float[target_size];
-        auto ids = new int64_t[target_size];
+        auto* dis = new float[target_size];
+        auto* ids = new int64_t[target_size];
         for (int i = 0; i < target_size; ++i) {
             ids[i] = static_cast<int64_t>(labels[i]);
             dis[i] = range_distances[i];
         }
 
-        result->NumElements(query_num)->Dim(target_size)->Distances(dis)->Ids(ids);
+        result->NumElements(query_num)
+            ->Dim(static_cast<int64_t>(target_size))
+            ->Distances(dis)
+            ->Ids(ids);
         return std::move(result);
     } catch (const std::invalid_argument& e) {
         LOG_ERROR_AND_RETURNS(ErrorType::INVALID_ARGUMENT,
@@ -579,7 +620,7 @@ DiskANN::range_search(const DatasetPtr& query,
 }
 
 BinarySet
-DiskANN::empty_binaryset() const {
+DiskANN::empty_binaryset() {
     // version 0 pairs:
     // - hnsw_blank: b"EMPTY_DISKANN"
     const std::string empty_str = "EMPTY_DISKANN";
@@ -673,13 +714,16 @@ DiskANN::deserialize(const ReaderSet& reader_set) {
         return {};
     }
 
-    std::stringstream pq_pivots_stream, disk_pq_compressed_vectors, graph, tag_stream;
+    std::stringstream pq_pivots_stream;
+    std::stringstream disk_pq_compressed_vectors;
+    std::stringstream graph;
+    std::stringstream tag_stream;
 
     {
         auto pq_reader = reader_set.Get(DISKANN_PQ);
         auto pq_pivots_data = std::make_unique<char[]>(pq_reader->Size());
         pq_reader->Read(0, pq_reader->Size(), pq_pivots_data.get());
-        pq_pivots_stream.write(pq_pivots_data.get(), pq_reader->Size());
+        pq_pivots_stream.write(pq_pivots_data.get(), static_cast<int64_t>(pq_reader->Size()));
         pq_pivots_stream.seekg(0);
     }
 
@@ -689,7 +733,7 @@ DiskANN::deserialize(const ReaderSet& reader_set) {
         compressed_vector_reader->Read(
             0, compressed_vector_reader->Size(), compressed_vector_data.get());
         disk_pq_compressed_vectors.write(compressed_vector_data.get(),
-                                         compressed_vector_reader->Size());
+                                         static_cast<int64_t>(compressed_vector_reader->Size()));
         disk_pq_compressed_vectors.seekg(0);
     }
 
@@ -697,7 +741,7 @@ DiskANN::deserialize(const ReaderSet& reader_set) {
         auto tag_reader = reader_set.Get(DISKANN_TAG_FILE);
         auto tag_data = std::make_unique<char[]>(tag_reader->Size());
         tag_reader->Read(0, tag_reader->Size(), tag_data.get());
-        tag_stream.write(tag_data.get(), tag_reader->Size());
+        tag_stream.write(tag_data.get(), static_cast<int64_t>(tag_reader->Size()));
         tag_stream.seekg(0);
     }
 
@@ -712,7 +756,7 @@ DiskANN::deserialize(const ReaderSet& reader_set) {
         if (graph_reader) {
             auto graph_data = std::make_unique<char[]>(graph_reader->Size());
             graph_reader->Read(0, graph_reader->Size(), graph_data.get());
-            graph.write(graph_data.get(), graph_reader->Size());
+            graph.write(graph_data.get(), static_cast<int64_t>(graph_reader->Size()));
             graph.seekg(0);
             index_->load_graph(graph);
         } else {
@@ -751,26 +795,30 @@ int64_t
 DiskANN::GetEstimateBuildMemory(const int64_t num_elements) const {
     int64_t estimate_memory_usage = 0;
     // Memory usage of graph (1.365 is the relaxation factor used by DiskANN during graph construction.)
-    estimate_memory_usage +=
-        (num_elements * R_ * sizeof(uint32_t) + num_elements * (R_ + 1) * sizeof(uint32_t)) *
-        GRAPH_SLACK;
+    estimate_memory_usage += (num_elements * R_ * sizeof(uint32_t)  // NOLINT
+                              + num_elements * (R_ + 1) * sizeof(uint32_t)) *
+                             GRAPH_SLACK;
     // Memory usage of disk layout
     if (sector_len_ > MINIMAL_SECTOR_LEN) {
-        estimate_memory_usage += (num_elements + 1) * sector_len_ * sizeof(uint8_t);
+        estimate_memory_usage +=
+            static_cast<int64_t>((num_elements + 1) * sector_len_ * sizeof(uint8_t));
     } else {
         size_t single_node =
-            (size_t)(dim_ * sizeof(float) + (R_ * GRAPH_SLACK + 1) * sizeof(uint32_t)) *
+            (size_t)(dim_ * sizeof(float) + (R_ * GRAPH_SLACK + 1) * sizeof(uint32_t)) *  // NOLINT
             VECTOR_PER_BLOCK;
         size_t node_per_sector = MINIMAL_SECTOR_LEN / single_node;
         size_t sector_size = num_elements / node_per_sector + 1;
-        estimate_memory_usage += (sector_size + 1) * sector_len_ * sizeof(uint8_t);
+        estimate_memory_usage +=
+            static_cast<int64_t>((sector_size + 1) * sector_len_ * sizeof(uint8_t));
     }
     // Memory usage of the ID mapping.
-    estimate_memory_usage += num_elements * sizeof(int64_t) * 2;
+    estimate_memory_usage += static_cast<int64_t>(num_elements * sizeof(int64_t) * 2);
     // Memory usage of the compressed PQ vectors.
-    estimate_memory_usage += disk_pq_dims_ * num_elements * sizeof(uint8_t) * 2;
+    estimate_memory_usage +=
+        static_cast<int64_t>(disk_pq_dims_ * num_elements * sizeof(uint8_t) * 2);
     // Memory usage of the PQ centers and chunck offsets.
-    estimate_memory_usage += 256 * dim_ * sizeof(float) * (3 + 1) + dim_ * sizeof(uint32_t);
+    estimate_memory_usage +=
+        static_cast<int64_t>(256 * dim_ * sizeof(float) * (3 + 1) + dim_ * sizeof(uint32_t));
     return estimate_memory_usage;
 }
 
@@ -814,7 +862,7 @@ template <typename T>
 Binary
 serialize_vector_to_binary(std::vector<T> data) {
     if (data.empty()) {
-        return Binary();
+        return {};
     }
     size_t total_size = data.size() * sizeof(T);
     std::shared_ptr<int8_t[]> raw_data(new int8_t[total_size], std::default_delete<int8_t[]>());
@@ -946,8 +994,8 @@ DiskANN::build_partial_graph(const DatasetPtr& base,
                              const BinarySet& binary_set,
                              BinarySet& after_binary_set,
                              int round) {
-    auto vectors = base->GetFloat32Vectors();
-    auto ids = base->GetIds();
+    const auto* vectors = base->GetFloat32Vectors();
+    const auto* ids = base->GetIds();
     auto data_num = base->GetNumElements();
     std::vector<int64_t> tags(ids, ids + data_num);
     {
@@ -957,7 +1005,8 @@ DiskANN::build_partial_graph(const DatasetPtr& base,
 
         std::unordered_set<uint32_t> builded_nodes;
         if (round > 1) {
-            std::stringstream graph_stream, tag_stream;
+            std::stringstream graph_stream;
+            std::stringstream tag_stream;
             convert_binary_to_stream(binary_set.Get(DISKANN_GRAPH), graph_stream);
             convert_binary_to_stream(binary_set.Get(DISKANN_TAG_FILE), tag_stream);
 
@@ -969,14 +1018,15 @@ DiskANN::build_partial_graph(const DatasetPtr& base,
         auto index_build_params = diskann::IndexWriteParametersBuilder(L_, R_)
                                       .with_num_threads(Options::Instance().num_threads_building())
                                       .build();
-        std::vector<size_t> failed_locs = build_index_->build(vectors,
-                                                              dim_,
-                                                              index_build_params,
-                                                              tags,
-                                                              use_reference_,
-                                                              round,
-                                                              build_batch_num_,
-                                                              &builded_nodes);
+        std::vector<size_t> failed_locs =
+            build_index_->build(vectors,
+                                dim_,
+                                index_build_params,
+                                tags,
+                                use_reference_,
+                                round,
+                                static_cast<int32_t>(build_batch_num_),
+                                &builded_nodes);
         build_index_->save(graph_stream_, tag_stream_);
         after_binary_set.Set(BUILD_NODES,
                              serialize_to_binary<std::unordered_set<uint32_t>>(builded_nodes));
@@ -985,7 +1035,7 @@ DiskANN::build_partial_graph(const DatasetPtr& base,
     }
     after_binary_set.Set(DISKANN_GRAPH, convert_stream_to_binary(graph_stream_));
     after_binary_set.Set(DISKANN_TAG_FILE, convert_stream_to_binary(tag_stream_));
-    return tl::expected<void, Error>();
+    return {};
 }
 
 tl::expected<void, Error>
@@ -1005,7 +1055,7 @@ DiskANN::load_disk_index(const BinarySet& binary_set) {
     } else {
         graph_stream_.str("");
     }
-    return tl::expected<void, Error>();
+    return {};
 }
 
 }  // namespace vsag

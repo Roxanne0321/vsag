@@ -15,15 +15,13 @@
 
 #pragma once
 
-#if defined(ENABLE_SSE)
-#include <xmmintrin.h>  //todo
-#endif
-
 #include <cstring>
 #include <nlohmann/json.hpp>
 
 #include "basic_io.h"
 #include "index/index_common_param.h"
+#include "memory_io_parameter.h"
+#include "prefetch.h"
 #include "vsag/allocator.h"
 
 namespace vsag {
@@ -35,13 +33,15 @@ public:
         current_size_ = MIN_SIZE;
     }
 
-    MemoryIO(const JsonType& io_param, const IndexCommonParam& common_param)
-        : allocator_(common_param.allocator_.get()) {
-        start_ = reinterpret_cast<uint8_t*>(allocator_->Allocate(MIN_SIZE));
-        current_size_ = MIN_SIZE;
+    explicit MemoryIO(const MemoryIOParamPtr& param, const IndexCommonParam& common_param)
+        : MemoryIO(common_param.allocator_.get()) {
     }
 
-    ~MemoryIO() {
+    explicit MemoryIO(const IOParamPtr& param, const IndexCommonParam& common_param)
+        : MemoryIO(std::dynamic_pointer_cast<MemoryIOParameter>(param), common_param) {
+    }
+
+    ~MemoryIO() override {
         allocator_->Deallocate(start_);
     }
 
@@ -125,9 +125,7 @@ MemoryIO::MultiReadImpl(uint8_t* datas, uint64_t* sizes, uint64_t* offsets, uint
 }
 void
 MemoryIO::PrefetchImpl(uint64_t offset, uint64_t cache_line) {
-#if defined(ENABLE_SSE)
-    _mm_prefetch(this->start_ + offset, _MM_HINT_T0);  // todo
-#endif
+    PrefetchLines(this->start_ + offset, cache_line);
 }
 void
 MemoryIO::SerializeImpl(StreamWriter& writer) {

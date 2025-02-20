@@ -26,7 +26,7 @@ public:
     explicit GraphInterfaceTest(GraphInterfacePtr graph) : graph_(std::move(graph)){};
 
     void
-    BasicTest(uint64_t max_id, uint64_t count, GraphInterfacePtr other);
+    BasicTest(uint64_t max_id, uint64_t count, const GraphInterfacePtr& other);
 
 public:
     GraphInterfacePtr graph_{nullptr};

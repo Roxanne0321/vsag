@@ -26,6 +26,7 @@
 #include "common.h"
 #include "data_cell/flatten_interface.h"
 #include "data_cell/graph_interface.h"
+#include "hgraph_parameter.h"
 #include "index/index_common_param.h"
 #include "index_feature_list.h"
 #include "typing.h"
@@ -35,22 +36,7 @@
 namespace vsag {
 class HGraph {
 public:
-    struct CompareByFirst {
-        constexpr bool
-        operator()(std::pair<float, InnerIdType> const& a,
-                   std::pair<float, InnerIdType> const& b) const noexcept {
-            return a.first < b.first;
-        }
-    };
-
-    using MaxHeap = std::priority_queue<std::pair<float, InnerIdType>,
-                                        Vector<std::pair<float, InnerIdType>>,
-                                        CompareByFirst>;
-
-    HGraph(const JsonType& index_param, const IndexCommonParam& common_param) noexcept;
-
-    tl::expected<void, Error>
-    Init();
+    HGraph(const HGraphParameter& param, const IndexCommonParam& common_param);
 
     tl::expected<std::vector<int64_t>, Error>
     Build(const DatasetPtr& data);
@@ -98,7 +84,7 @@ public:
     }
 
     uint64_t
-    EstimateMemory(const uint64_t num_elements) const;
+    EstimateMemory(uint64_t num_elements) const;
 
     // TODO(LHT): implement
     inline int64_t
@@ -111,6 +97,11 @@ public:
 
     bool
     CheckFeature(IndexFeature feature) const;
+
+    bool
+    CheckIdExist(LabelType id) const {
+        return this->label_lookup_.find(id) != this->label_lookup_.end();
+    }
 
     inline void
     SetBuildThreadsCount(uint64_t count) {
@@ -150,7 +141,7 @@ private:
     MaxHeap
     search_one_graph(const float* query,
                      const GraphInterfacePtr& graph,
-                     const FlattenInterfacePtr& codes,
+                     const FlattenInterfacePtr& flatten,
                      InnerSearchParam& inner_search_param) const;
 
     void
@@ -208,7 +199,6 @@ private:
     int64_t dim_{0};
     MetricType metric_{MetricType::METRIC_TYPE_L2SQR};
 
-    const JsonType index_param_{};
     const IndexCommonParam common_param_{};
 
     std::default_random_engine level_generator_{2021};

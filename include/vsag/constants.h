@@ -21,6 +21,7 @@ extern const char* const INDEX_DISKANN;
 extern const char* const INDEX_HNSW;
 extern const char* const INDEX_FRESH_HNSW;
 extern const char* const INDEX_PYRAMID;
+extern const char* const INDEX_BRUTE_FORCE;
 extern const char* const DIM;
 extern const char* const NUM_ELEMENTS;
 extern const char* const IDS;
@@ -61,6 +62,12 @@ extern const char* const DISKANN_PARAMETER_USE_REFERENCE;
 extern const char* const DISKANN_PARAMETER_USE_OPQ;
 extern const char* const DISKANN_PARAMETER_USE_ASYNC_IO;
 extern const char* const DISKANN_PARAMETER_USE_BSA;
+extern const char* const DISKANN_PARAMETER_GRAPH_TYPE;
+extern const char* const DISKANN_PARAMETER_ALPHA;
+extern const char* const DISKANN_PARAMETER_GRAPH_ITER_TURN;
+extern const char* const DISKANN_PARAMETER_NEIGHBOR_SAMPLE_RATE;
+extern const char* const DISKANN_GRAPH_TYPE_VAMANA;
+extern const char* const DISKANN_GRAPH_TYPE_ODESCENT;
 
 extern const char* const DISKANN_PARAMETER_BEAM_SEARCH;
 extern const char* const DISKANN_PARAMETER_IO_LIMIT;
@@ -109,5 +116,8 @@ extern const char* const HGRAPH_BUILD_EF_CONSTRUCTION;
 extern const char* const HGRAPH_INIT_CAPACITY;
 extern const char* const HGRAPH_BUILD_THREAD_COUNT;
 extern const char* const HGRAPH_PRECISE_QUANTIZATION_TYPE;
+
+extern const char* const BRUTE_FORCE_QUANTIZATION_TYPE;
+extern const char* const BRUTE_FORCE_IO_TYPE;
 
 }  // namespace vsag
