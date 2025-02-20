@@ -93,6 +93,12 @@ protected:
                   bool expected_success = true);
 
     static void
+    TestSearchWithDirtyVector(const IndexPtr& index,
+                              const TestDatasetPtr& dataset,
+                              const std::string& search_param,
+                              bool expected_success = true);
+
+    static void
     TestRangeSearch(const IndexPtr& index,
                     const TestDatasetPtr& dataset,
                     const std::string& search_param,
@@ -111,6 +117,11 @@ protected:
     TestCalcDistanceById(const IndexPtr& index, const TestDatasetPtr& dataset, float error = 1e-5);
 
     static void
+    TestBatchCalcDistanceById(const IndexPtr& index,
+                              const TestDatasetPtr& dataset,
+                              float error = 1e-5);
+
+    static void
     TestSerializeFile(const IndexPtr& index_from,
                       const IndexPtr& index_to,
                       const TestDatasetPtr& dataset,
@@ -118,10 +129,19 @@ protected:
                       bool expected_success = true);
 
     static void
-    TestSerializeBinary(const IndexPtr& index,
-                        const TestDatasetPtr& dataset,
-                        const std::string& path,
-                        bool expected_success = true){};
+    TestSerializeBinarySet(const IndexPtr& index_from,
+                           const IndexPtr& index_to,
+                           const TestDatasetPtr& dataset,
+                           const std::string& search_param,
+                           bool expected_success = true);
+
+    static void
+    TestSerializeReaderSet(const IndexPtr& index_from,
+                           const IndexPtr& index_to,
+                           const TestDatasetPtr& dataset,
+                           const std::string& search_param,
+                           const std::string& index_name,
+                           bool expected_success = true);
 
     static void
     TestConcurrentKnnSearch(const IndexPtr& index,
@@ -130,12 +150,29 @@ protected:
                             float expected_recall = 0.99,
                             bool expected_success = true);
 
+    static IndexPtr
+    TestMergeIndex(const std::string& name,
+                   const std::string& build_param,
+                   const TestDatasetPtr& dataset,
+                   int32_t split_num = 1,
+                   bool expect_success = true);
+
     static void
     TestConcurrentAdd(const IndexPtr& index,
                       const TestDatasetPtr& dataset,
                       bool expected_success = true);
     static void
     TestDuplicateAdd(const IndexPtr& index, const TestDatasetPtr& dataset);
+
+    static void
+    TestEstimateMemory(const std::string& index_name,
+                       const std::string& build_param,
+                       const TestDatasetPtr& dataset);
+
+    static void
+    TestCheckIdExist(const IndexPtr& index, const TestDatasetPtr& dataset);
+
+    constexpr static float RECALL_THRESHOLD = 0.95;
 };
 
 }  // namespace fixtures

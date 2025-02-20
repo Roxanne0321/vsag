@@ -205,8 +205,8 @@ private:
     tl::expected<void, Error>
     load_disk_index(const BinarySet& binary_set);
 
-    BinarySet
-    empty_binaryset() const;
+    static BinarySet
+    empty_binaryset();
 
 private:
     std::shared_ptr<LocalFileReader> reader_;
@@ -242,6 +242,9 @@ private:
     bool empty_index_ = false;
 
     mutable std::shared_mutex rw_mutex_;
+
+    IndexCommonParam common_param_;
+    DiskannParameters diskann_params_;
 
 private:  // Request Statistics
     mutable std::mutex stats_mutex_;

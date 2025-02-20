@@ -17,6 +17,8 @@
 
 #include <utility>
 
+#include "base_filter_functor.h"
+#include "logger.h"
 #include "pyramid_zparameters.h"
 #include "safe_allocator.h"
 
@@ -24,19 +26,20 @@ namespace vsag {
 
 class SubReader : public Reader {
 public:
-    SubReader(std::shared_ptr<Reader> parrent_reader, uint64_t start_pos, uint64_t size)
-        : parrent_reader_(std::move(parrent_reader)), size_(size), start_pos_(start_pos) {
+    SubReader(std::shared_ptr<Reader> parent_reader, uint64_t start_pos, uint64_t size)
+        : parent_reader_(std::move(parent_reader)), size_(size), start_pos_(start_pos) {
     }
 
     void
     Read(uint64_t offset, uint64_t len, void* dest) override {
         if (offset + len > size_)
             throw std::out_of_range("Read out of range.");
-        parrent_reader_->Read(offset + start_pos_, len, dest);
+        parent_reader_->Read(offset + start_pos_, len, dest);
     }
 
     void
     AsyncRead(uint64_t offset, uint64_t len, void* dest, CallBack callback) override {
+        throw std::runtime_error("No support for SubReader AsyncRead");
     }
 
     uint64_t
@@ -45,7 +48,7 @@ public:
     }
 
 private:
-    std::shared_ptr<Reader> parrent_reader_;
+    std::shared_ptr<Reader> parent_reader_;
     uint64_t size_;
     uint64_t start_pos_;
 };
@@ -70,6 +73,8 @@ struct IndexNode {
     }
 };
 
+using SearchFunc = std::function<tl::expected<DatasetPtr, Error>(IndexPtr)>;
+
 class Pyramid : public Index {
 public:
     Pyramid(PyramidParameters pyramid_param, const IndexCommonParam& commom_param)
@@ -90,33 +95,64 @@ public:
     KnnSearch(const DatasetPtr& query,
               int64_t k,
               const std::string& parameters,
-              BitsetPtr invalid = nullptr) const override;
+              BitsetPtr invalid = nullptr) const override {
+        SearchFunc search_func = [&](IndexPtr index) {
+            return index->KnnSearch(query, k, parameters, invalid);
+        };
+        SAFE_CALL(return this->knn_search(query, k, parameters, search_func);)
+    }
 
     tl::expected<DatasetPtr, Error>
     KnnSearch(const DatasetPtr& query,
               int64_t k,
               const std::string& parameters,
-              const std::function<bool(int64_t)>& filter) const override;
+              const std::function<bool(int64_t)>& filter) const override {
+        SearchFunc search_func = [&](IndexPtr index) {
+            return index->KnnSearch(query, k, parameters, filter);
+        };
+        SAFE_CALL(return this->knn_search(query, k, parameters, search_func);)
+    }
 
     tl::expected<DatasetPtr, Error>
     RangeSearch(const DatasetPtr& query,
                 float radius,
                 const std::string& parameters,
-                int64_t limited_size = -1) const override;
+                int64_t limited_size = -1) const override {
+        SearchFunc search_func = [&](IndexPtr index) {
+            return index->RangeSearch(query, radius, parameters, limited_size);
+        };
+        int64_t final_limit =
+            limited_size == -1 ? std::numeric_limits<int64_t>::max() : limited_size;
+        SAFE_CALL(return this->knn_search(query, final_limit, parameters, search_func);)
+    }
 
     tl::expected<DatasetPtr, Error>
     RangeSearch(const DatasetPtr& query,
                 float radius,
                 const std::string& parameters,
                 BitsetPtr invalid,
-                int64_t limited_size = -1) const override;
+                int64_t limited_size = -1) const override {
+        SearchFunc search_func = [&](IndexPtr index) {
+            return index->RangeSearch(query, radius, parameters, invalid, limited_size);
+        };
+        int64_t final_limit =
+            limited_size == -1 ? std::numeric_limits<int64_t>::max() : limited_size;
+        SAFE_CALL(return this->knn_search(query, final_limit, parameters, search_func);)
+    }
 
     tl::expected<DatasetPtr, Error>
     RangeSearch(const DatasetPtr& query,
                 float radius,
                 const std::string& parameters,
                 const std::function<bool(int64_t)>& filter,
-                int64_t limited_size = -1) const override;
+                int64_t limited_size = -1) const override {
+        SearchFunc search_func = [&](IndexPtr index) {
+            return index->RangeSearch(query, radius, parameters, filter, limited_size);
+        };
+        int64_t final_limit =
+            limited_size == -1 ? std::numeric_limits<int64_t>::max() : limited_size;
+        SAFE_CALL(return this->knn_search(query, final_limit, parameters, search_func);)
+    }
 
     tl::expected<BinarySet, Error>
     Serialize() const override;
@@ -134,6 +170,12 @@ public:
     GetMemoryUsage() const override;
 
 private:
+    tl::expected<DatasetPtr, Error>
+    knn_search(const DatasetPtr& query,
+               int64_t k,
+               const std::string& parameters,
+               const SearchFunc& search_func) const;
+
     inline std::shared_ptr<IndexNode>
     try_get_node_with_init(UnorderedMap<std::string, std::shared_ptr<IndexNode>>& index_map,
                            const std::string& key) {

@@ -32,12 +32,15 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "../../default_allocator.h"
-#include "../../simd/simd.h"
 #include "../../utils.h"
 #include "algorithm_interface.h"
 #include "block_manager.h"
+#include "data_cell/flatten_interface.h"
+#include "data_cell/graph_interface.h"
+#include "default_allocator.h"
+#include "simd/simd.h"
 #include "visited_list_pool.h"
+#include "vsag/dataset.h"
 namespace hnswlib {
 using InnerIdType = vsag::InnerIdType;
 using linklistsizeint = unsigned int;
@@ -146,8 +149,22 @@ public:
     float
     getDistanceByLabel(LabelType label, const void* data_point) override;
 
+    tl::expected<vsag::DatasetPtr, vsag::Error>
+    getBatchDistanceByLabel(const int64_t* ids, const void* data_point, int64_t count) override;
+
     bool
     isValidLabel(LabelType label) override;
+
+    size_t
+    getMaxDegree() {
+        return maxM0_;
+    };
+
+    linklistsizeint*
+    get_linklist0(InnerIdType internal_id) const {
+        // only for test now
+        return (linklistsizeint*)(data_level0_memory_->GetElementPtr(internal_id, offsetLevel0_));
+    }
 
     inline LabelType
     getExternalLabel(InnerIdType internal_id) const {
@@ -231,7 +248,7 @@ public:
     searchBaseLayerST(InnerIdType ep_id,
                       const void* data_point,
                       size_t ef,
-                      vsag::BaseFilterFunctor* isIdAllowed = nullptr) const;
+                      const vsag::FilterPtr is_id_allowed = nullptr) const;
 
     template <bool has_deletions, bool collect_metrics = false>
     MaxHeap
@@ -239,7 +256,7 @@ public:
                       const void* data_point,
                       float radius,
                       int64_t ef,
-                      vsag::BaseFilterFunctor* isIdAllowed = nullptr) const;
+                      const vsag::FilterPtr is_id_allowed = nullptr) const;
 
     void
     getNeighborsByHeuristic2(MaxHeap& top_candidates, size_t M);
@@ -293,6 +310,11 @@ public:
     void
     resizeIndex(size_t new_max_elements) override;
 
+    void
+    setDataAndGraph(vsag::FlattenInterfacePtr& data,
+                    vsag::GraphInterfacePtr& graph,
+                    vsag::Vector<LabelType>& ids);
+
     size_t
     calcSerializeSize() override;
 
@@ -301,9 +323,6 @@ public:
     // save index to a file stream
     void
     saveIndex(std::ostream& out_stream) override;
-
-    void
-    saveIndex(const std::string& location) override;
 
     void
     SerializeImpl(StreamWriter& writer);
@@ -316,6 +335,10 @@ public:
 
     const float*
     getDataByLabel(LabelType label) const override;
+
+    void
+    copyDataByLabel(LabelType label, void* data_point) override;
+
     /*
     * Marks an element with the given label deleted, does NOT really change the current graph.
     */
@@ -327,28 +350,14 @@ public:
     * whereas maxM0_ has to be limited to the lower 16 bits, however, still large enough in almost all cases.
     */
     void
-    markDeletedInternal(InnerIdType internalId);
-
-    /*
-    * Removes the deleted mark of the node, does NOT really change the current graph.
-    *
-    * Note: the method is not safe to use when replacement of deleted elements is enabled,
-    *  because elements marked as deleted can be completely removed by addPoint
-    */
-    void
-    unmarkDelete(LabelType label);
-    /*
-    * Remove the deleted mark of the node.
-    */
-    void
-    unmarkDeletedInternal(InnerIdType internalId);
+    markDeletedInternal(InnerIdType internal_id);
 
     /*
     * Checks the first 16 bits of the memory to see if the element is marked deleted.
     */
     bool
-    isMarkedDeleted(InnerIdType internalId) const {
-        auto data = getLinklistAtLevelWithLock(internalId, 0);
+    isMarkedDeleted(InnerIdType internal_id) const {
+        auto data = getLinklistAtLevelWithLock(internal_id, 0);
         unsigned char* ll_cur = ((unsigned char*)data.get()) + 2;
         return *ll_cur & DELETE_MARK;
     }
@@ -397,16 +406,13 @@ public:
     searchKnn(const void* query_data,
               size_t k,
               uint64_t ef,
-              vsag::BaseFilterFunctor* isIdAllowed = nullptr) const override;
+              const vsag::FilterPtr is_id_allowed = nullptr) const override;
 
     std::priority_queue<std::pair<float, LabelType>>
     searchRange(const void* query_data,
                 float radius,
                 uint64_t ef,
-                vsag::BaseFilterFunctor* isIdAllowed = nullptr) const override;
-
-    void
-    checkIntegrity();
+                const vsag::FilterPtr is_id_allowed = nullptr) const override;
 
     void
     reset();

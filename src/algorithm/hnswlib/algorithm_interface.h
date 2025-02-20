@@ -24,6 +24,9 @@
 #include "space_interface.h"
 #include "stream_reader.h"
 #include "typing.h"
+#include "vsag/dataset.h"
+#include "vsag/errors.h"
+#include "vsag/expected.hpp"
 
 namespace hnswlib {
 
@@ -36,26 +39,23 @@ public:
     addPoint(const void* datapoint, LabelType label) = 0;
 
     virtual std::priority_queue<std::pair<dist_t, LabelType>>
-    searchKnn(const void*,
-              size_t,
-              size_t,
-              vsag::BaseFilterFunctor* isIdAllowed = nullptr) const = 0;
+    searchKnn(const void* query_data,
+              size_t k,
+              size_t ef,
+              const vsag::FilterPtr is_id_allowed = nullptr) const = 0;
 
     virtual std::priority_queue<std::pair<dist_t, LabelType>>
-    searchRange(const void*,
-                float,
-                size_t,
-                vsag::BaseFilterFunctor* isIdAllowed = nullptr) const = 0;
+    searchRange(const void* query_data,
+                float radius,
+                size_t ef,
+                const vsag::FilterPtr is_id_allowed = nullptr) const = 0;
 
     // Return k nearest neighbor in the order of closer fist
     virtual std::vector<std::pair<dist_t, LabelType>>
     searchKnnCloserFirst(const void* query_data,
                          size_t k,
                          size_t ef,
-                         vsag::BaseFilterFunctor* isIdAllowed = nullptr) const;
-
-    virtual void
-    saveIndex(const std::string& location) = 0;
+                         const vsag::FilterPtr& is_id_allowed = nullptr) const;
 
     virtual void
     saveIndex(void* d) = 0;
@@ -69,8 +69,14 @@ public:
     virtual float
     getDistanceByLabel(LabelType label, const void* data_point) = 0;
 
+    virtual tl::expected<vsag::DatasetPtr, vsag::Error>
+    getBatchDistanceByLabel(const int64_t* ids, const void* data_point, int64_t count) = 0;
+
     virtual const float*
     getDataByLabel(LabelType label) const = 0;
+
+    virtual void
+    copyDataByLabel(LabelType label, void* data_point) = 0;
 
     virtual std::priority_queue<std::pair<float, LabelType>>
     bruteForce(const void* data_point, int64_t k) = 0;

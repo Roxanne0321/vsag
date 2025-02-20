@@ -16,6 +16,7 @@
 #pragma once
 
 #include "algorithm/hgraph.h"
+#include "hgraph_index_zparameters.h"
 #include "index_common_param.h"
 #include "typing.h"
 #include "vsag/index.h"
@@ -23,14 +24,9 @@
 namespace vsag {
 class HGraphIndex : public Index {
 public:
-    HGraphIndex(const JsonType& index_param, const IndexCommonParam& common_param) noexcept;
+    HGraphIndex(const HGraphIndexParameter& param, const IndexCommonParam& common_param);
 
     ~HGraphIndex() override;
-
-    tl::expected<void, Error>
-    Init() {
-        return this->hgraph_->Init();
-    }
 
     tl::expected<std::vector<int64_t>, Error>
     Build(const DatasetPtr& data) override {
@@ -126,24 +122,29 @@ public:
         SAFE_CALL(return this->hgraph_->Deserialize(reader_set));
     }
 
-    int64_t
+    [[nodiscard]] int64_t
     GetNumElements() const override {
         return this->hgraph_->GetNumElements();
     }
 
-    int64_t
+    [[nodiscard]] int64_t
     GetMemoryUsage() const override {
         return this->hgraph_->GetMemoryUsage();
     }
 
     [[nodiscard]] uint64_t
-    EstimateMemory(const uint64_t num_elements) const override {
+    EstimateMemory(uint64_t num_elements) const override {
         return this->hgraph_->EstimateMemory(num_elements);
     }
 
-    bool
+    [[nodiscard]] bool
     CheckFeature(IndexFeature feature) const override {
         return this->hgraph_->CheckFeature(feature);
+    }
+
+    [[nodiscard]] bool
+    CheckIdExist(int64_t id) const override {
+        return this->hgraph_->CheckIdExist(id);
     }
 
 private:

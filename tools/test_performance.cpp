@@ -23,7 +23,7 @@
 #include <string>
 #include <unordered_set>
 
-#include "eval_dataset.h"
+#include "eval/eval_dataset.h"
 #include "nlohmann/json.hpp"
 #include "spdlog/spdlog.h"
 #include "vsag/vsag.h"
@@ -31,6 +31,7 @@
 using namespace nlohmann;
 using namespace spdlog;
 using namespace vsag;
+using namespace vsag::eval;
 
 json
 run_test(const std::string& index_name,
@@ -98,7 +99,8 @@ public:
           const std::string& build_parameters) {
         spdlog::debug("index_name: " + index_name);
         spdlog::debug("build_parameters: " + build_parameters);
-        auto index = Factory::CreateIndex(index_name, build_parameters).value();
+        Engine e;
+        auto index = e.CreateIndex(index_name, build_parameters).value();
 
         spdlog::debug("dataset_path: " + dataset_path);
         auto eval_dataset = EvalDataset::Load(dataset_path);

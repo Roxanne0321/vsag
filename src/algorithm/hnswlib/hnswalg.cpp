@@ -16,6 +16,8 @@
 #include "hnswalg.h"
 
 #include <memory>
+
+#include "data_cell/graph_interface.h"
 namespace hnswlib {
 HierarchicalNSW::HierarchicalNSW(SpaceInterface* s,
                                  size_t max_elements,
@@ -169,6 +171,34 @@ HierarchicalNSW::getDistanceByLabel(LabelType label, const void* data_point) {
     normalizeVector(data_point, normalize_query);
     float dist = fstdistfunc_(data_point, getDataByInternalId(internal_id), dist_func_param_);
     return dist;
+}
+
+tl::expected<vsag::DatasetPtr, vsag::Error>
+HierarchicalNSW::getBatchDistanceByLabel(const int64_t* ids,
+                                         const void* data_point,
+                                         int64_t count) {
+    std::shared_lock lock_table(label_lookup_lock_);
+    int64_t valid_cnt = 0;
+    auto result = vsag::Dataset::Make();
+    result->Owner(true, allocator_);
+    auto* distances = (float*)allocator_->Allocate(sizeof(float) * count);
+    result->Distances(distances);
+    std::shared_ptr<float[]> normalize_query;
+    normalizeVector(data_point, normalize_query);
+    for (int i = 0; i < count; i++) {
+        auto search = label_lookup_.find(ids[i]);
+        if (search == label_lookup_.end()) {
+            distances[i] = -1;
+        } else {
+            InnerIdType internal_id = search->second;
+            float dist =
+                fstdistfunc_(data_point, getDataByInternalId(internal_id), dist_func_param_);
+            distances[i] = dist;
+            valid_cnt++;
+        }
+    }
+    result->NumElements(count);
+    return std::move(result);
 }
 
 bool
@@ -376,7 +406,7 @@ MaxHeap
 HierarchicalNSW::searchBaseLayerST(InnerIdType ep_id,
                                    const void* data_point,
                                    size_t ef,
-                                   vsag::BaseFilterFunctor* isIdAllowed) const {
+                                   const vsag::FilterPtr is_id_allowed) const {
     VisitedListPtr vl = visited_list_pool_->getFreeVisitedList();
     vl_type* visited_array = vl->mass;
     vl_type visited_array_tag = vl->curV;
@@ -386,7 +416,7 @@ HierarchicalNSW::searchBaseLayerST(InnerIdType ep_id,
 
     float lower_bound;
     if ((!has_deletions || !isMarkedDeleted(ep_id)) &&
-        ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(ep_id)))) {
+        ((!is_id_allowed) || is_id_allowed->CheckValid(getExternalLabel(ep_id)))) {
         float dist = fstdistfunc_(data_point, getDataByInternalId(ep_id), dist_func_param_);
         lower_bound = dist;
         top_candidates.emplace(dist, ep_id);
@@ -402,7 +432,7 @@ HierarchicalNSW::searchBaseLayerST(InnerIdType ep_id,
         std::pair<float, InnerIdType> current_node_pair = candidate_set.top();
 
         if ((-current_node_pair.first) > lower_bound &&
-            (top_candidates.size() == ef || (!isIdAllowed && !has_deletions))) {
+            (top_candidates.size() == ef || (!is_id_allowed && !has_deletions))) {
             break;
         }
         candidate_set.pop();
@@ -448,7 +478,8 @@ HierarchicalNSW::searchBaseLayerST(InnerIdType ep_id,
 #endif
 
                     if ((!has_deletions || !isMarkedDeleted(candidate_id)) &&
-                        ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(candidate_id))))
+                        ((!is_id_allowed) ||
+                         is_id_allowed->CheckValid(getExternalLabel(candidate_id))))
                         top_candidates.emplace(dist, candidate_id);
 
                     if (top_candidates.size() > ef)
@@ -471,7 +502,7 @@ HierarchicalNSW::searchBaseLayerST(InnerIdType ep_id,
                                    const void* data_point,
                                    float radius,
                                    int64_t ef,
-                                   vsag::BaseFilterFunctor* isIdAllowed) const {
+                                   const vsag::FilterPtr is_id_allowed) const {
     VisitedListPtr vl = visited_list_pool_->getFreeVisitedList();
     vl_type* visited_array = vl->mass;
     vl_type visited_array_tag = vl->curV;
@@ -481,7 +512,7 @@ HierarchicalNSW::searchBaseLayerST(InnerIdType ep_id,
 
     float lower_bound;
     if ((!has_deletions || !isMarkedDeleted(ep_id)) &&
-        ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(ep_id)))) {
+        ((!is_id_allowed) || is_id_allowed->CheckValid(getExternalLabel(ep_id)))) {
         float dist = fstdistfunc_(data_point, getDataByInternalId(ep_id), dist_func_param_);
         lower_bound = dist;
         if (dist <= radius + THRESHOLD_ERROR)
@@ -543,7 +574,8 @@ HierarchicalNSW::searchBaseLayerST(InnerIdType ep_id,
 #endif
 
                     if ((!has_deletions || !isMarkedDeleted(candidate_id)) &&
-                        ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(candidate_id))))
+                        ((!is_id_allowed) ||
+                         is_id_allowed->CheckValid(getExternalLabel(candidate_id))))
                         top_candidates.emplace(dist, candidate_id);
 
                     if (not top_candidates.empty())
@@ -759,11 +791,11 @@ HierarchicalNSW::resizeIndex(size_t new_max_elements) {
     }
 
     // Reallocate all other layers
-    char** linkLists_new =
+    char** link_lists_new =
         (char**)allocator_->Reallocate(link_lists_, sizeof(void*) * new_max_elements);
-    if (linkLists_new == nullptr)
+    if (link_lists_new == nullptr)
         throw std::runtime_error("Not enough memory: resizeIndex failed to allocate other layers");
-    link_lists_ = linkLists_new;
+    link_lists_ = link_lists_new;
     memset(link_lists_ + max_elements_, 0, (new_max_elements - max_elements_) * sizeof(void*));
     max_elements_ = new_max_elements;
 }
@@ -787,14 +819,6 @@ void
 HierarchicalNSW::saveIndex(std::ostream& out_stream) {
     IOStreamWriter writer(out_stream);
     SerializeImpl(writer);
-}
-
-void
-HierarchicalNSW::saveIndex(const std::string& location) {
-    std::ofstream output(location, std::ios::binary);
-    IOStreamWriter writer(output);
-    SerializeImpl(writer);
-    output.close();
 }
 
 template <typename T>
@@ -942,6 +966,19 @@ HierarchicalNSW::getDataByLabel(LabelType label) const {
     return data_ptr;
 }
 
+void
+HierarchicalNSW::copyDataByLabel(LabelType label, void* data_point) {
+    std::unique_lock lock_table(label_lookup_lock_);
+
+    auto search = label_lookup_.find(label);
+    if (search == label_lookup_.end() || isMarkedDeleted(search->second)) {
+        throw std::runtime_error("Label not found");
+    }
+    InnerIdType internal_id = search->second;
+
+    memcpy(data_point, getDataByInternalId(internal_id), data_size_);
+}
+
 /*
     * Marks an element with the given label deleted, does NOT really change the current graph.
     */
@@ -976,44 +1013,6 @@ HierarchicalNSW::markDeletedInternal(InnerIdType internalId) {
         }
     } else {
         throw std::runtime_error("The requested to delete element is already deleted");
-    }
-}
-
-/*
-    * Removes the deleted mark of the node, does NOT really change the current graph.
-    *
-    * Note: the method is not safe to use when replacement of deleted elements is enabled,
-    *  because elements marked as deleted can be completely removed by addPoint
-    */
-void
-HierarchicalNSW::unmarkDelete(LabelType label) {
-    // lock all operations with element by label
-    std::unique_lock lock_table(label_lookup_lock_);
-    auto search = label_lookup_.find(label);
-    if (search == label_lookup_.end()) {
-        throw std::runtime_error("Label not found");
-    }
-    InnerIdType internalId = search->second;
-    unmarkDeletedInternal(internalId);
-}
-
-/*
-    * Remove the deleted mark of the node.
-    */
-void
-HierarchicalNSW::unmarkDeletedInternal(InnerIdType internalId) {
-    assert(internalId < cur_element_count_);
-    if (isMarkedDeleted(internalId)) {
-        unsigned char* ll_cur =
-            (unsigned char*)data_level0_memory_->GetElementPtr(internalId, offsetLevel0_) + 2;
-        *ll_cur &= ~DELETE_MARK;
-        num_deleted_ -= 1;
-        if (allow_replace_deleted_) {
-            std::unique_lock<std::mutex> lock_deleted_elements(deleted_elements_lock_);
-            deleted_elements_.erase(internalId);
-        }
-    } else {
-        throw std::runtime_error("The requested to undelete element is not deleted");
     }
 }
 
@@ -1396,7 +1395,7 @@ std::priority_queue<std::pair<float, LabelType>>
 HierarchicalNSW::searchKnn(const void* query_data,
                            size_t k,
                            uint64_t ef,
-                           vsag::BaseFilterFunctor* isIdAllowed) const {
+                           const vsag::FilterPtr is_id_allowed) const {
     std::shared_lock resize_lock(resize_mutex_);
     std::priority_queue<std::pair<float, LabelType>> result;
     if (cur_element_count_ == 0)
@@ -1441,8 +1440,13 @@ HierarchicalNSW::searchKnn(const void* query_data,
 
     MaxHeap top_candidates(allocator_);
 
-    top_candidates =
-        searchBaseLayerST<false, true>(currObj, query_data, std::max(ef, k), isIdAllowed);
+    if (num_deleted_ == 0) {
+        top_candidates =
+            searchBaseLayerST<false, true>(currObj, query_data, std::max(ef, k), is_id_allowed);
+    } else {
+        top_candidates =
+            searchBaseLayerST<true, true>(currObj, query_data, std::max(ef, k), is_id_allowed);
+    }
 
     while (top_candidates.size() > k) {
         top_candidates.pop();
@@ -1459,7 +1463,7 @@ std::priority_queue<std::pair<float, LabelType>>
 HierarchicalNSW::searchRange(const void* query_data,
                              float radius,
                              uint64_t ef,
-                             vsag::BaseFilterFunctor* isIdAllowed) const {
+                             const vsag::FilterPtr is_id_allowed) const {
     std::shared_lock resize_lock(resize_mutex_);
     std::priority_queue<std::pair<float, LabelType>> result;
     if (cur_element_count_ == 0)
@@ -1501,8 +1505,13 @@ HierarchicalNSW::searchRange(const void* query_data,
     }
 
     MaxHeap top_candidates(allocator_);
-
-    top_candidates = searchBaseLayerST<false, true>(currObj, query_data, radius, ef, isIdAllowed);
+    if (num_deleted_ == 0) {
+        top_candidates =
+            searchBaseLayerST<false, true>(currObj, query_data, radius, ef, is_id_allowed);
+    } else {
+        top_candidates =
+            searchBaseLayerST<true, true>(currObj, query_data, radius, ef, is_id_allowed);
+    }
 
     while (not top_candidates.empty()) {
         std::pair<float, InnerIdType> rez = top_candidates.top();
@@ -1515,37 +1524,32 @@ HierarchicalNSW::searchRange(const void* query_data,
 }
 
 void
-HierarchicalNSW::checkIntegrity() {
-    int connections_checked = 0;
-    vsag::Vector<int> inbound_connections_num(cur_element_count_, 0, allocator_);
-    for (int i = 0; i < cur_element_count_; i++) {
-        for (int l = 0; l <= element_levels_[i]; l++) {
-            auto data_ll_cur = getLinklistAtLevelWithLock(i, l);
-            linklistsizeint* ll_cur = (linklistsizeint*)data_ll_cur.get();
-            int size = getListCount(ll_cur);
-            auto* data = (InnerIdType*)(ll_cur + 1);
-            vsag::UnorderedSet<InnerIdType> s(allocator_);
-            for (int j = 0; j < size; j++) {
-                assert(data[j] > 0);
-                assert(data[j] < cur_element_count_);
-                assert(data[j] != i);
-                inbound_connections_num[data[j]]++;
-                s.insert(data[j]);
-                connections_checked++;
-            }
-            assert(s.size() == size);
-        }
+HierarchicalNSW::setDataAndGraph(vsag::FlattenInterfacePtr& data,
+                                 vsag::GraphInterfacePtr& graph,
+                                 vsag::Vector<LabelType>& ids) {
+    resizeIndex(data->total_count_);
+    std::shared_ptr<uint8_t[]> temp_vector =
+        std::shared_ptr<uint8_t[]>(new uint8_t[data->code_size_]);
+    for (int i = 0; i < data->total_count_; ++i) {
+        data->GetCodesById(i, temp_vector.get());
+        std::memcpy(getDataByInternalId(i),
+                    reinterpret_cast<const char*>(temp_vector.get()),
+                    data->code_size_);
+        vsag::Vector<InnerIdType> edges(allocator_);
+        graph->GetNeighbors(i, edges);
+        setBatchNeigohbors(i, 0, edges.data(), edges.size());
+        setExternalLabel(i, ids[i]);
+        label_lookup_[ids[i]] = i;
+        element_levels_[i] = 0;
     }
-    if (cur_element_count_ > 1) {
-        int min1 = inbound_connections_num[0], max1 = inbound_connections_num[0];
-        for (int i = 0; i < cur_element_count_; i++) {
-            assert(inbound_connections_num[i] > 0);
-            min1 = std::min(inbound_connections_num[i], min1);
-            max1 = std::max(inbound_connections_num[i], max1);
-        }
-        std::cout << "Min inbound: " << min1 << ", Max inbound:" << max1 << "\n";
-    }
-    std::cout << "integrity ok, checked " << connections_checked << " connections\n";
+    cur_element_count_ = data->total_count_;
+    enterpoint_node_ = 0;
+    max_level_ = 0;
 }
 
+template MaxHeap
+HierarchicalNSW::searchBaseLayerST<false, false>(InnerIdType ep_id,
+                                                 const void* data_point,
+                                                 size_t ef,
+                                                 const vsag::FilterPtr is_id_allowed) const;
 }  // namespace hnswlib

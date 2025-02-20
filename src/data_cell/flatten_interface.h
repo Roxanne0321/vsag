@@ -15,9 +15,9 @@
 
 #pragma once
 
-#include <nlohmann/json.hpp>
 #include <string>
 
+#include "flatten_datacell_parameter.h"
 #include "index/index_common_param.h"
 #include "quantization/computer.h"
 #include "stream_reader.h"
@@ -33,7 +33,7 @@ public:
     FlattenInterface() = default;
 
     static FlattenInterfacePtr
-    MakeInstance(const JsonType& flatten_interface_param, const IndexCommonParam& common_param);
+    MakeInstance(const FlattenDataCellParamPtr& param, const IndexCommonParam& common_param);
 
 public:
     virtual void
@@ -106,6 +106,8 @@ public:
     InnerIdType total_count_{0};
     InnerIdType max_capacity_{1000000};
     uint32_t code_size_{0};
+    uint32_t prefetch_jump_code_size_{1};
+    uint32_t prefetch_cache_line_size_{1};
 };
 
 }  // namespace vsag

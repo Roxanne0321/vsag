@@ -30,8 +30,8 @@ class FlattenDataCell : public FlattenInterface {
 public:
     FlattenDataCell() = default;
 
-    explicit FlattenDataCell(const JsonType& quantization_param,
-                             const JsonType& io_param,
+    explicit FlattenDataCell(const QuantizerParamPtr& quantization_param,
+                             const IOParamPtr& io_param,
                              const IndexCommonParam& common_param);
 
     void
@@ -67,7 +67,7 @@ public:
 
     void
     Prefetch(InnerIdType id) override {
-        io_->Prefetch(id * code_size_);
+        io_->Prefetch(id * code_size_, code_size_);
     };
 
     [[nodiscard]] std::string
@@ -127,8 +127,8 @@ private:
 };
 
 template <typename QuantTmpl, typename IOTmpl>
-FlattenDataCell<QuantTmpl, IOTmpl>::FlattenDataCell(const JsonType& quantization_param,
-                                                    const JsonType& io_param,
+FlattenDataCell<QuantTmpl, IOTmpl>::FlattenDataCell(const QuantizerParamPtr& quantization_param,
+                                                    const IOParamPtr& io_param,
                                                     const IndexCommonParam& common_param)
     : allocator_(common_param.allocator_.get()) {
     this->quantizer_ = std::make_shared<QuantTmpl>(quantization_param, common_param);
@@ -226,7 +226,18 @@ FlattenDataCell<QuantTmpl, IOTmpl>::query(float* result_dists,
                                           const std::shared_ptr<Computer<QuantTmpl>>& computer,
                                           const InnerIdType* idx,
                                           InnerIdType id_count) {
+    for (uint32_t i = 0; i < this->prefetch_jump_code_size_ and i < id_count; i++) {
+        this->io_->Prefetch(static_cast<uint64_t>(idx[i]) * static_cast<uint64_t>(code_size_),
+                            this->prefetch_cache_line_size_);
+    }
+
     for (int64_t i = 0; i < id_count; ++i) {
+        if (i + this->prefetch_jump_code_size_ < id_count) {
+            this->io_->Prefetch(static_cast<uint64_t>(idx[i + this->prefetch_jump_code_size_]) *
+                                    static_cast<uint64_t>(code_size_),
+                                this->prefetch_cache_line_size_);
+        }
+
         bool release = false;
         const auto* codes = this->GetCodesById(idx[i], release);
         computer->ComputeDist(codes, result_dists + i);

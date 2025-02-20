@@ -23,6 +23,8 @@ const char* const INDEX_DISKANN = "diskann";
 const char* const INDEX_HNSW = "hnsw";
 const char* const INDEX_FRESH_HNSW = "fresh_hnsw";
 const char* const INDEX_PYRAMID = "pyramid";
+const char* const INDEX_BRUTE_FORCE = "brute_force";
+
 const char* const DIM = "dim";
 const char* const NUM_ELEMENTS = "num_elements";
 const char* const IDS = "ids";
@@ -68,6 +70,13 @@ const char* const DISKANN_PARAMETER_BEAM_SEARCH = "beam_search";
 const char* const DISKANN_PARAMETER_IO_LIMIT = "io_limit";
 const char* const DISKANN_PARAMETER_EF_SEARCH = "ef_search";
 const char* const DISKANN_PARAMETER_REORDER = "use_reorder";
+const char* const DISKANN_PARAMETER_GRAPH_TYPE = "graph_type";
+const char* const DISKANN_PARAMETER_ALPHA = "alpha";
+const char* const DISKANN_PARAMETER_GRAPH_ITER_TURN = "graph_iter_turn";
+const char* const DISKANN_PARAMETER_NEIGHBOR_SAMPLE_RATE = "neighbor_sample_rate";
+
+const char* const DISKANN_GRAPH_TYPE_VAMANA = "vamana";
+const char* const DISKANN_GRAPH_TYPE_ODESCENT = "odescent";
 
 const char* const HNSW_PARAMETER_EF_RUNTIME = "ef_search";
 const char* const HNSW_PARAMETER_M = "max_degree";
@@ -110,5 +119,8 @@ const char* const HGRAPH_BUILD_EF_CONSTRUCTION = "ef_construction";
 const char* const HGRAPH_INIT_CAPACITY = "hgraph_init_capacity";
 const char* const HGRAPH_BUILD_THREAD_COUNT = "build_thread_count";
 const char* const HGRAPH_PRECISE_QUANTIZATION_TYPE = "precise_quantization_type";
+
+const char* const BRUTE_FORCE_QUANTIZATION_TYPE = "quantization_type";
+const char* const BRUTE_FORCE_IO_TYPE = "io_type";
 
 };  // namespace vsag

@@ -28,6 +28,7 @@
 #include "vsag/dataset.h"
 #include "vsag/errors.h"
 #include "vsag/expected.hpp"
+#include "vsag/filter.h"
 #include "vsag/index_features.h"
 #include "vsag/readerset.h"
 
@@ -35,6 +36,12 @@ namespace vsag {
 
 class Index;
 using IndexPtr = std::shared_ptr<Index>;
+using IdMapFunction = std::function<std::tuple<bool, int64_t>(int64_t)>;
+
+struct MergeUnit {
+    IndexPtr index = nullptr;
+    IdMapFunction id_map_func = nullptr;
+};
 
 class Index {
 public:
@@ -105,11 +112,11 @@ public:
      *
      * @param id indicates the old id of a base point in index
      * @param new_base is the updated new vector of the base point
-     * @param need_fine_tune indicates whether the connection of the base point needs to be fine-tuned
+     * @param force_update is false means that a check of the connectivity of the graph updated by this operation is performed
      * @return result indicates whether the update operation is successful.
      */
     virtual tl::expected<bool, Error>
-    UpdateVector(int64_t id, const DatasetPtr& new_base, bool need_fine_tune = false) {
+    UpdateVector(int64_t id, const DatasetPtr& new_base, bool force_update = false) {
         throw std::runtime_error("Index not support update vector");
     }
 
@@ -144,6 +151,24 @@ public:
               int64_t k,
               const std::string& parameters,
               const std::function<bool(int64_t)>& filter) const = 0;
+
+    /**
+      * @brief Performing single KNN search on index
+      *
+      * @param query should contains dim, num_elements and vectors
+      * @param k the result size of every query
+      * @param filter represents whether an element is filtered out by pre-filter
+      * @return result contains
+      *                - num_elements: 1
+      *                - ids, distances: length is (num_elements * k)
+      */
+    virtual tl::expected<DatasetPtr, Error>
+    KnnSearch(const DatasetPtr& query,
+              int64_t k,
+              const std::string& parameters,
+              const FilterPtr& filter) const {
+        throw std::runtime_error("Index doesn't support new filter");
+    }
 
     /**
       * @brief Performing single range search on index
@@ -210,6 +235,30 @@ public:
                 int64_t limited_size = -1) const = 0;
 
     /**
+      * @brief Performing single range search on index
+      *
+      * @param query should contains dim, num_elements and vectors
+      * @param radius of search, determines which results will be returned
+      * @param limited_size of search result size.
+      *                - limited_size <= 0 : no limit
+      *                - limited_size == 0 : error
+      *                - limited_size >= 1 : limit result size to limited_size
+      * @param filter represents whether an element is filtered out by pre-filter
+      * @return result contains
+      *                - num_elements: 1
+      *                - dim: the size of results
+      *                - ids, distances: length is dim
+      */
+    virtual tl::expected<DatasetPtr, Error>
+    RangeSearch(const DatasetPtr& query,
+                float radius,
+                const std::string& parameters,
+                const FilterPtr& filter,
+                int64_t limited_size = -1) const {
+        throw std::runtime_error("Index doesn't support new filter");
+    }
+
+    /**
      * @brief Pretraining the conjugate graph involves searching with generated queries and providing feedback.
      *
      * @param base_tag_ids is the label of choosen base vectors that need to be enhanced
@@ -250,6 +299,19 @@ public:
     };
 
     /**
+     * @brief Calculate the distance between the query and the vector of the given ID for batch.
+     *
+     * @param query is the embedding of query
+     * @param ids is the unique identifier of the vector to be calculated in the index.
+     * @param count is the count of ids
+     * @return result is valid distance of input ids. '-1' indicates an invalid distance.
+     */
+    virtual tl::expected<DatasetPtr, Error>
+    CalDistanceById(const float* query, const int64_t* ids, int64_t count) const {
+        throw std::runtime_error("Index doesn't support get distance by id");
+    };
+
+    /**
      * @brief Checks if the specified feature is supported by the index.
      *
      * This method checks whether the given `feature` is supported by the index.
@@ -261,6 +323,24 @@ public:
     [[nodiscard]] virtual bool
     CheckFeature(IndexFeature feature) const {
         throw std::runtime_error("Index doesn't support check feature");
+    }
+
+    /**
+     * @brief Merges multiple graph indexes with ID mapping into the current index
+     *
+     * Processes MergeUnit entries to incorporate sub-indexes into this index. For each element:
+     * - id_map_func determines which IDs from the sub-index are retained
+     * - Specifies the ID remapping into the destination index space
+     *
+     * @param merge_units Vector containing:
+     *   - index: Source sub-index to merge from
+     *   - id_map_func: Filter+remap function that for each source ID (int64_t) returns:
+     *     * bool: true if the ID should be included in the merge
+     *     * int64_t: Target ID in destination index (only valid when bool is true)
+     */
+    virtual tl::expected<void, Error>
+    Merge(const std::vector<MergeUnit>& merge_units) {
+        throw std::runtime_error("Index doesn't support merge");
     }
 
 public:
@@ -341,7 +421,7 @@ public:
       * @return number of bytes estimate used.
       */
     [[nodiscard]] virtual uint64_t
-    EstimateMemory(const uint64_t num_elements) const {
+    EstimateMemory(uint64_t num_elements) const {
         throw std::runtime_error("Index not support estimate the memory by element counts");
     }
 
@@ -364,6 +444,18 @@ public:
     [[nodiscard]] virtual std::string
     GetStats() const {
         throw std::runtime_error("Index not support range search");
+    }
+
+    /**
+      * @brief Check if a specific ID exists in the index.
+      *
+      * @param id The ID to check for existence in the index.
+      * @return True if the ID exists, otherwise false.
+      * @throws std::runtime_error if the index does not support checking ID existence.
+      */
+    [[nodiscard]] virtual bool
+    CheckIdExist(int64_t id) const {
+        throw std::runtime_error("Index not support check id exist");
     }
 
 public:
@@ -395,7 +487,7 @@ tl::expected<float, Error>
 estimate_search_time(const std::string& index_name,
                      int64_t data_num,
                      int64_t data_dim,
-                     const std::string& params);
+                     const std::string& parameters);
 
 /**
   * [experimental]

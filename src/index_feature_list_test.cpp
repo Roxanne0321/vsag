@@ -15,9 +15,9 @@
 
 #include "index_feature_list.h"
 
-#include "catch2/catch_test_macros.hpp"
+#include <catch2/catch_test_macros.hpp>
 
-TEST_CASE("Test set&check", "[ut][index_feature_list]") {
+TEST_CASE("IndexFeatureList Set and Check Test", "[ut][IndexFeatureList]") {
     using namespace vsag;
     IndexFeatureList list;
     auto count = static_cast<uint32_t>(IndexFeature::INDEX_FEATURE_COUNT);

@@ -30,6 +30,8 @@
 #include "algorithm/hnswlib/hnswlib.h"
 #include "base_filter_functor.h"
 #include "common.h"
+#include "data_cell/flatten_interface.h"
+#include "data_cell/graph_interface.h"
 #include "data_type.h"
 #include "hnsw_zparameters.h"
 #include "impl/conjugate_graph.h"
@@ -51,6 +53,9 @@ public:
 
     virtual ~HNSW() {
         alg_hnsw_ = nullptr;
+        if (use_conjugate_graph_) {
+            conjugate_graph_.reset();
+        }
         allocator_.reset();
     }
 
@@ -76,8 +81,8 @@ public:
     }
 
     tl::expected<bool, Error>
-    UpdateVector(int64_t id, const DatasetPtr& new_base, bool need_fine_tune = false) override {
-        SAFE_CALL(return this->update_vector(id, new_base, need_fine_tune));
+    UpdateVector(int64_t id, const DatasetPtr& new_base, bool force_update = false) override {
+        SAFE_CALL(return this->update_vector(id, new_base, force_update));
     }
 
     tl::expected<DatasetPtr, Error>
@@ -145,8 +150,18 @@ public:
         SAFE_CALL(return alg_hnsw_->getDistanceByLabel(id, vector));
     };
 
+    virtual tl::expected<DatasetPtr, Error>
+    CalDistanceById(const float* vector, const int64_t* ids, int64_t count) const override {
+        SAFE_CALL(return alg_hnsw_->getBatchDistanceByLabel(ids, vector, count));
+    };
+
     [[nodiscard]] bool
     CheckFeature(IndexFeature feature) const override;
+
+    [[nodiscard]] bool
+    CheckIdExist(int64_t id) const override {
+        return this->alg_hnsw_->isValidLabel(id);
+    }
 
 public:
     tl::expected<BinarySet, Error>
@@ -174,6 +189,11 @@ public:
         SAFE_CALL(return this->deserialize(in_stream));
     }
 
+    tl::expected<void, Error>
+    Merge(const std::vector<MergeUnit>& merge_units) override {
+        SAFE_CALL(return this->merge(merge_units));
+    }
+
 public:
     int64_t
     GetNumElements() const override {
@@ -198,6 +218,16 @@ public:
     tl::expected<bool, Error>
     InitMemorySpace();
 
+    bool
+    ExtractDataAndGraph(FlattenInterfacePtr& data,
+                        GraphInterfacePtr& graph,
+                        Vector<LabelType>& ids,
+                        IdMapFunction func,
+                        Allocator* allocator);
+
+    bool
+    SetDataAndGraph(FlattenInterfacePtr& data, GraphInterfacePtr& graph, Vector<LabelType>& ids);
+
 private:
     tl::expected<std::vector<int64_t>, Error>
     build(const DatasetPtr& base);
@@ -212,7 +242,7 @@ private:
     update_id(int64_t old_id, int64_t new_id);
 
     tl::expected<bool, Error>
-    update_vector(int64_t id, const DatasetPtr& new_base, bool need_fine_tune);
+    update_vector(int64_t id, const DatasetPtr& new_base, bool force_update);
 
     template <typename FilterType>
     tl::expected<DatasetPtr, Error>
@@ -225,7 +255,7 @@ private:
     knn_search(const DatasetPtr& query,
                int64_t k,
                const std::string& parameters,
-               BaseFilterFunctor* filter_ptr) const;
+               const FilterPtr filter_ptr) const;
 
     template <typename FilterType>
     tl::expected<DatasetPtr, Error>
@@ -239,7 +269,7 @@ private:
     range_search(const DatasetPtr& query,
                  float radius,
                  const std::string& parameters,
-                 BaseFilterFunctor* filter_ptr,
+                 const FilterPtr filter_ptr,
                  int64_t limited_size) const;
 
     tl::expected<uint32_t, Error>
@@ -267,7 +297,7 @@ private:
     deserialize(const BinarySet& binary_set);
 
     tl::expected<void, Error>
-    deserialize(const ReaderSet& binary_set);
+    deserialize(const ReaderSet& reader_set);
 
     tl::expected<void, Error>
     deserialize(std::istream& in_stream);
@@ -278,8 +308,11 @@ private:
     void
     set_dataset(const DatasetPtr& base, const void* vectors_ptr, uint32_t num_element) const;
 
-    BinarySet
-    empty_binaryset() const;
+    tl::expected<void, Error>
+    merge(const std::vector<MergeUnit>& merge_units);
+
+    static BinarySet
+    empty_binaryset();
 
     void
     init_feature_list();
@@ -296,6 +329,8 @@ private:
     bool empty_index_ = false;
     bool use_reversed_edges_ = false;
     bool is_init_memory_ = false;
+    int64_t max_degree_{0};
+
     DataTypes type_;
 
     std::shared_ptr<Allocator> allocator_;
@@ -306,6 +341,7 @@ private:
     mutable std::shared_mutex rw_mutex_;
 
     IndexFeatureList feature_list_{};
+    const IndexCommonParam index_common_param_;
 };
 
 }  // namespace vsag

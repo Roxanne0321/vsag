@@ -57,6 +57,12 @@ enum IndexFeature {
     SUPPORT_SEARCH_DELETE_CONCURRENT,     /**< Supports concurrent searching and deletion */
     SUPPORT_ADD_SEARCH_DELETE_CONCURRENT, /**< Supports concurrent addition, searching, and deletion */
 
+    SUPPORT_ESTIMATE_MEMORY, /**< Supports estimate memory usage by data count */
+
+    SUPPORT_CHECK_ID_EXIST, /**< Supports check whether given id exists in index */
+
+    SUPPORT_MERGE_INDEX, /**< Supports to merge indices of the same type */
+
     INDEX_FEATURE_COUNT /** must be last one */
 };
 }  // namespace vsag

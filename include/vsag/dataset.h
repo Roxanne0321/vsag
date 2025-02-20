@@ -25,6 +25,15 @@
 
 namespace vsag {
 
+struct SparseVector {
+    uint32_t dim_;   // dim of vector
+    uint32_t* ids_;  // contains ids with size of dim_
+    float* vals_;    // contains vals with size of dim_
+
+    SparseVector() : dim_{0}, ids_{nullptr}, vals_{nullptr} {
+    }
+};
+
 class Dataset;
 using DatasetPtr = std::shared_ptr<Dataset>;
 
@@ -192,14 +201,14 @@ public:
      * @return DatasetPtr A shared pointer to the dataset with updated sparse vectors.
      */
     virtual DatasetPtr
-    SparseVectors(const struct SparseVectors sparse_vectors) = 0;
+    SparseVectors(const SparseVector* sparse_vectors) = 0;
 
     /**
      * @brief Retrieves the sparse struct of the dataset.
      *
      * @return const SparseVector to the array of sparse vectors.
      */
-    virtual const struct SparseVectors
+    virtual const SparseVector*
     GetSparseVectors() const = 0;
 
     /**
