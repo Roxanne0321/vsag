@@ -82,6 +82,102 @@ public:
         index_->Build(dataset);
     }
 
+    void
+    SparseIVFBuild(const std::string& filename) {
+        std::ifstream infile(filename, std::ios::binary);
+        if (!infile) {
+            throw std::runtime_error("Could not open file");
+        }
+
+        int64_t sizes[3];
+        infile.read(reinterpret_cast<char*>(sizes), 3 * sizeof(int64_t));
+        int64_t num_rows = sizes[0];
+        int64_t num_cols = sizes[1];
+        int64_t nnz = sizes[2];
+
+        std::vector<int64_t> indptr(num_rows + 1);
+        infile.read(reinterpret_cast<char*>(indptr.data()), (num_rows + 1) * sizeof(int64_t));
+
+        std::vector<int32_t> indices(nnz);
+        infile.read(reinterpret_cast<char*>(indices.data()), nnz * sizeof(int32_t));
+
+        std::vector<float> data(nnz);
+        infile.read(reinterpret_cast<char*>(data.data()), nnz * sizeof(float));
+
+        infile.close();
+
+        vsag::SparseVector* sparse_vectors = new vsag::SparseVector[num_rows];
+
+        for (int64_t i = 0; i < num_rows; ++i) {
+            int64_t row_start = indptr[i];
+            int64_t row_end = indptr[i + 1];
+            int64_t row_size = row_end - row_start;
+
+            sparse_vectors[i].dim_ = static_cast<uint32_t>(row_size);
+            sparse_vectors[i].ids_ = new uint32_t[row_size];
+            sparse_vectors[i].vals_ = new float[row_size];
+
+            std::memcpy(
+                sparse_vectors[i].ids_, indices.data() + row_start, row_size * sizeof(uint32_t));
+            std::memcpy(sparse_vectors[i].vals_, data.data() + row_start, row_size * sizeof(float));
+        }
+        auto base = vsag::Dataset::Make();
+        base->SparseVectors(sparse_vectors)->NumElements(num_rows)->Owner(true);
+
+        index_->Build(base);
+    }
+
+    py::object
+    BatchSearch(int32_t nq,
+                py::array_t<uint32_t> indptr,
+                py::array_t<uint32_t> indices,
+                py::array_t<float> data,
+                int32_t topk) {
+        vsag::SparseVector* query_vectors = new vsag::SparseVector[nq];
+
+        auto indptr_unchecked = indptr.unchecked<1>();
+
+        for (int32_t i = 0; i < nq; ++i) {
+            uint32_t row_start = indptr_unchecked(i);
+            uint32_t row_end = indptr_unchecked(i + 1);
+            uint32_t row_size = row_end - row_start;
+
+            query_vectors[i].dim_ = row_size;
+            query_vectors[i].ids_ = new uint32_t[row_size];
+            query_vectors[i].vals_ = new float[row_size];
+
+            std::memcpy(query_vectors[i].ids_,
+                        indices.mutable_data() + row_start,
+                        row_size * sizeof(uint32_t));
+            std::memcpy(
+                query_vectors[i].vals_, data.mutable_data() + row_start, row_size * sizeof(float));
+        }
+        auto query = vsag::Dataset::Make();
+        query->SparseVectors(query_vectors)->NumElements(nq)->Owner(true);
+
+        std::vector<size_t> ids_shape = {static_cast<size_t>(nq), static_cast<size_t>(topk)};
+        std::vector<size_t> ids_strides = {sizeof(int64_t) * topk, sizeof(int64_t)};
+
+        auto sparse_ivf_search_parameters = R"({})";
+
+        auto ids = py::array_t<int64_t>(ids_shape, ids_strides);
+
+        if (auto result = index_->KnnSearch(query, topk, sparse_ivf_search_parameters);
+            result.has_value()) {
+            auto ids_view = ids.mutable_unchecked<2>();  // 注意这里指定为二维
+            auto vsag_ids = result.value()->GetIds();
+
+            // 使用二维索引遍历
+            for (int i = 0; i < nq; ++i) {
+                for (int j = 0; j < topk; ++j) {
+                    ids_view(i, j) = vsag_ids[i * topk + j];
+                }
+            }
+        }
+
+        return ids;
+    }
+
     py::object
     KnnSearch(py::array_t<float> vector, size_t k, std::string& parameters) {
         auto query = vsag::Dataset::Make();
@@ -172,8 +268,16 @@ PYBIND11_MODULE(_pyvsag, m) {
              py::arg("ids"),
              py::arg("num_elements"),
              py::arg("dim"))
+        .def("sparse_iv_build", &Index::SparseIVFBuild, py::arg("filename"))
         .def(
             "knn_search", &Index::KnnSearch, py::arg("vector"), py::arg("k"), py::arg("parameters"))
+        .def("batch_search",
+             &Index::BatchSearch,
+             py::arg("nq"),
+             py::arg("indptr"),
+             py::arg("indices"),
+             py::arg("data"),
+             py::arg("topk"))
         .def("range_search",
              &Index::RangeSearch,
              py::arg("vector"),

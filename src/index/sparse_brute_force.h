@@ -14,46 +14,28 @@
 
 #pragma once
 
+#include "vsag/index.h"
 #include "../utils.h"
+#include "vsag/errors.h"
+#include "vsag/binaryset.h"
 #include "base_filter_functor.h"
 #include "common.h"
-#include "index_common_param.h"
 #include "safe_allocator.h"
-#include "sparse_ivf_parameter.h"
+#include "index_common_param.h"
+#include "vsag/dataset.h"
+#include "typing.h"
 #include "stream_reader.h"
 #include "stream_writer.h"
-#include "typing.h"
-#include "vsag/binaryset.h"
-#include "vsag/dataset.h"
-#include "vsag/errors.h"
-#include "vsag/index.h"
-#include <iostream>
+#include "sparse_brute_force_parameter.h"
 
-namespace vsag {
+namespace vsag{
 
-class SparseIVF : public Index {
+class SparseBF : public Index{
 public:
-    SparseIVF(const SparseIVFParameter& param, const IndexCommonParam& index_common_param);
-    ~SparseIVF() {
-     if (this->inverted_lists_) {
-        for (int i = 0; i <= this->data_dim_; ++i) {
-            if (this->inverted_lists_[i].ids_) {
-                //std::cout << this->inverted_lists_[i].doc_num_ << std::endl;
-                //this->allocator_->Deallocate(this->inverted_lists_[i].ids_);
-                delete[] this->inverted_lists_[i].ids_;
-                }
-            }
-        delete[] this->inverted_lists_;
-     }
-     if (this->data_){
-        for(int i = 0; i < this->total_count_; i++) {
-            delete[] this->data_[i].ids_;
-            delete[] this->data_[i].vals_;
-        }
-        delete[] this->data_;
-     }
-    allocator_.reset();
-}
+    SparseBF(const SparseBFParameter& param, const IndexCommonParam& index_common_param);
+    ~SparseBF(){
+        allocator_.reset();
+    }
 
 public:
     tl::expected<std::vector<int64_t>, Error>
@@ -71,9 +53,9 @@ public:
               int64_t k,
               const std::string& parameters,
               BitsetPtr invalid = nullptr) const override {
-        std::function<bool(int64_t)> func = [&invalid](int64_t id) -> bool {
-            int64_t bit_index = id & ROW_ID_MASK;
-            return invalid->Test(bit_index);
+              std::function<bool(int64_t)> func = [&invalid](int64_t id) -> bool {
+              int64_t bit_index = id & ROW_ID_MASK;
+              return invalid->Test(bit_index);
         };
         if (invalid == nullptr) {
             func = nullptr;
@@ -164,12 +146,8 @@ private:
                const std::string& parameters,
                const std::function<bool(int64_t)>& filter) const;
 
-    void
-    search_one_query(const SparseVector& query_vector,
-                     int64_t k,
-                     int64_t* res_ids,
-                     float* res_dists,
-                     uint32_t& dist_cmp) const;
+    void search_one_query(const SparseVector& query_vector, int64_t k, 
+                          int64_t* res_ids, float* res_dists, uint32_t& dist_cmp) const;
 
     uint64_t
     cal_serialize_size() const {
@@ -177,14 +155,8 @@ private:
     }
 
 private:
-    struct InvertedList {
-        uint32_t doc_num_{0};
-        uint32_t* ids_{nullptr};
-    };
-    uint32_t data_dim_{0};
     uint32_t total_count_{0};
-    std::shared_ptr<Allocator> allocator_{nullptr};
-    SparseVector* data_;
-    InvertedList* inverted_lists_{nullptr};
-};
-}  // namespace vsag
+    std:: shared_ptr<Allocator> allocator_{nullptr};
+    const SparseVector* data_;
+    };
+}

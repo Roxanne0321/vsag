@@ -13,6 +13,9 @@ target_link_libraries(104_index_fresh_hnsw vsag)
 add_executable (105_index_brute_force 105_index_brute_force.cpp)
 target_link_libraries (105_index_brute_force vsag_static)
 
+add_executable (106_index_sparse_ivf 106_index_sparse_ivf.cpp)
+target_link_libraries (106_index_sparse_ivf vsag_static)
+
 add_executable (201_custom_allocator 201_custom_allocator.cpp)
 target_link_libraries (201_custom_allocator vsag)
 

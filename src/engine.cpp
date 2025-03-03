@@ -20,6 +20,10 @@
 #include <string>
 
 #include "common.h"
+#include "index/sparse_brute_force.h"
+#include "index/sparse_brute_force_parameter.h"
+#include "index/sparse_ivf.h"
+#include "index/sparse_ivf_parameter.h"
 #include "index/brute_force.h"
 #include "index/brute_force_parameter.h"
 #include "index/diskann.h"
@@ -129,6 +133,28 @@ Engine::CreateIndex(const std::string& origin_name, const std::string& parameter
                 PyramidParameters::FromJson(pyramid_param_obj, index_common_params);
             logger::debug("created a pyramid index");
             return std::make_shared<Pyramid>(pyramid_params, index_common_params);
+        }else if(name == INDEX_SPARSE_IVF){
+            logger::debug("created a sparse_ivf index");
+            JsonType json;
+            if (parsed_params.contains(INDEX_PARAM)) {
+                json = std::move(parsed_params[INDEX_PARAM]);
+            }
+            SparseIVFParameter param;
+            param.FromJson(json);
+            auto sparse_ivf = std::make_shared<SparseIVF>(param, index_common_params);
+
+            return sparse_ivf;
+        }else if(name == INDEX_SPARSE_BRUTE_FORCE){
+            logger::debug("created a sparse_brute_force index");
+            JsonType json;
+            if (parsed_params.contains(INDEX_PARAM)) {
+                json = std::move(parsed_params[INDEX_PARAM]);
+            }
+            SparseBFParameter param;
+            param.FromJson(json);
+            auto sparse_ivf = std::make_shared<SparseBF>(param, index_common_params);
+
+            return sparse_ivf;
         } else {
             LOG_ERROR_AND_RETURNS(
                 ErrorType::UNSUPPORTED_INDEX, "failed to create index(unsupported): ", name);

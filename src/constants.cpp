@@ -24,6 +24,8 @@ const char* const INDEX_HNSW = "hnsw";
 const char* const INDEX_FRESH_HNSW = "fresh_hnsw";
 const char* const INDEX_PYRAMID = "pyramid";
 const char* const INDEX_BRUTE_FORCE = "brute_force";
+const char* const INDEX_SPARSE_IVF = "sparse_ivf";
+const char* const INDEX_SPARSE_BRUTE_FORCE = "sparse_brute_force";
 
 const char* const DIM = "dim";
 const char* const NUM_ELEMENTS = "num_elements";
