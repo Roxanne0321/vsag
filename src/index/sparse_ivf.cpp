@@ -509,7 +509,7 @@ SparseIVF::knn_search(const DatasetPtr& query,
         }
     }
 
-    std::cout << "dist_cmp: " << dist_cmp << std::endl;
+    //std::cout << "dist_cmp: " << dist_cmp << std::endl;
     return std::move(dataset_results);
 }
 
