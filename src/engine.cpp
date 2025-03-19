@@ -134,27 +134,23 @@ Engine::CreateIndex(const std::string& origin_name, const std::string& parameter
             logger::debug("created a pyramid index");
             return std::make_shared<Pyramid>(pyramid_params, index_common_params);
         }else if(name == INDEX_SPARSE_IVF){
-            logger::debug("created a sparse_ivf index");
-            JsonType json;
-            if (parsed_params.contains(INDEX_PARAM)) {
-                json = std::move(parsed_params[INDEX_PARAM]);
-            }
-            SparseIVFParameter param;
-            param.FromJson(json);
-            auto sparse_ivf = std::make_shared<SparseIVF>(param, index_common_params);
-
-            return sparse_ivf;
+            // read parameters from json, throw exception if not exists
+            CHECK_ARGUMENT(parsed_params.contains(INDEX_SPARSE_IVF),
+                           fmt::format("parameters must contains {}", INDEX_SPARSE_IVF));
+            auto& sparse_ivf_param_obj = parsed_params[INDEX_SPARSE_IVF];
+            auto sparse_ivf_params = SparseIVFParameters::FromJson(sparse_ivf_param_obj, index_common_params);
+            logger::debug("created a sparse ivf index");
+            auto index = std::make_shared<SparseIVF>(sparse_ivf_params, index_common_params);
+            return index;
         }else if(name == INDEX_SPARSE_BRUTE_FORCE){
-            logger::debug("created a sparse_brute_force index");
-            JsonType json;
-            if (parsed_params.contains(INDEX_PARAM)) {
-                json = std::move(parsed_params[INDEX_PARAM]);
-            }
-            SparseBFParameter param;
-            param.FromJson(json);
-            auto sparse_ivf = std::make_shared<SparseBF>(param, index_common_params);
-
-            return sparse_ivf;
+            // read parameters from json, throw exception if not exists
+            CHECK_ARGUMENT(parsed_params.contains(INDEX_SPARSE_BRUTE_FORCE),
+                           fmt::format("parameters must contains {}", INDEX_SPARSE_BRUTE_FORCE));
+            auto& sparse_bf_param_obj = parsed_params[INDEX_SPARSE_BRUTE_FORCE];
+            auto sparse_bf_params = SparseBFParameters::FromJson(sparse_bf_param_obj, index_common_params);
+            logger::debug("created a sparse brute force index");
+            auto index = std::make_shared<SparseBF>(sparse_bf_params, index_common_params);
+            return index;
         } else {
             LOG_ERROR_AND_RETURNS(
                 ErrorType::UNSUPPORTED_INDEX, "failed to create index(unsupported): ", name);

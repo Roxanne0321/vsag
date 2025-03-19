@@ -27,12 +27,13 @@
 #include "stream_reader.h"
 #include "stream_writer.h"
 #include "sparse_brute_force_parameter.h"
+#include <omp.h>
 
 namespace vsag{
 
 class SparseBF : public Index{
 public:
-    SparseBF(const SparseBFParameter& param, const IndexCommonParam& index_common_param);
+    SparseBF(const SparseBFParameters& param, const IndexCommonParam& index_common_param);
     ~SparseBF(){
         allocator_.reset();
     }
@@ -157,6 +158,7 @@ private:
 private:
     uint32_t total_count_{0};
     std:: shared_ptr<Allocator> allocator_{nullptr};
-    const SparseVector* data_;
+    SparseVector* data_;
+    mutable int num_threads_;
     };
 }

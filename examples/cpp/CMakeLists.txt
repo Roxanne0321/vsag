@@ -1,6 +1,12 @@
 add_executable(101_index_hnsw 101_index_hnsw.cpp)
 target_link_libraries(101_index_hnsw vsag)
 
+add_executable(test_summary test_summary.cpp)
+target_link_libraries(test_summary vsag)
+
+add_executable(safe safe.cpp)
+target_link_libraries(safe vsag)
+
 add_executable(102_index_diskann 102_index_diskann.cpp)
 target_link_libraries(102_index_diskann vsag)
 

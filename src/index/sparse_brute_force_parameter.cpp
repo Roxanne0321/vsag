@@ -14,16 +14,26 @@
 // limitations under the License.
 
 #include "sparse_brute_force_parameter.h"
+#include "vsag/constants.h"
 
-namespace vsag {
-    void
-    SparseBFParameter::FromJson(const JsonType& json){
-
+ namespace vsag {
+    SparseBFParameters
+    SparseBFParameters::FromJson(JsonType& sparse_bf_param_obj, IndexCommonParam index_common_param) {
+        SparseBFParameters obj;
+        return obj;
     }
 
-    JsonType
-    SparseBFParameter::ToJson(){
-        JsonType json;
-        return json;
+    SparseBFSearchParameters
+    SparseBFSearchParameters::FromJson(const std::string& json_string) {
+        JsonType params = JsonType::parse(json_string);
+        SparseBFSearchParameters obj;
+        if (!params.contains(INDEX_SPARSE_BRUTE_FORCE)) {
+        throw std::invalid_argument(
+            fmt::format("parameters must contains {}", INDEX_SPARSE_BRUTE_FORCE));
+    }
+        if(params[INDEX_SPARSE_BRUTE_FORCE].contains(SPARSE_NUM_THREADS)) {
+            obj.num_threads = params[INDEX_SPARSE_BRUTE_FORCE][SPARSE_NUM_THREADS];
+        }
+        return obj;
     }
 }

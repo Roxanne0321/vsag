@@ -132,7 +132,7 @@ public:
                 py::array_t<uint32_t> indptr,
                 py::array_t<uint32_t> indices,
                 py::array_t<float> data,
-                int32_t topk) {
+                int32_t topk, std::string& parameters) {
         vsag::SparseVector* query_vectors = new vsag::SparseVector[nq];
 
         auto indptr_unchecked = indptr.unchecked<1>();
@@ -158,24 +158,30 @@ public:
         std::vector<size_t> ids_shape = {static_cast<size_t>(nq), static_cast<size_t>(topk)};
         std::vector<size_t> ids_strides = {sizeof(int64_t) * topk, sizeof(int64_t)};
 
-        auto sparse_ivf_search_parameters = R"({})";
+        std::vector<size_t> dists_shape = {static_cast<size_t>(nq), static_cast<size_t>(topk)};
+        std::vector<size_t> dists_strides = {sizeof(float) * topk, sizeof(float)};
 
         auto ids = py::array_t<int64_t>(ids_shape, ids_strides);
+        auto dists = py::array_t<float>(dists_shape, dists_strides);
 
-        if (auto result = index_->KnnSearch(query, topk, sparse_ivf_search_parameters);
+        if (auto result = index_->KnnSearch(query, topk, parameters);
             result.has_value()) {
             auto ids_view = ids.mutable_unchecked<2>();  // 注意这里指定为二维
             auto vsag_ids = result.value()->GetIds();
+
+            auto dists_view = dists.mutable_unchecked<2>();  // 注意这里指定为二维
+            auto vsag_dists = result.value()->GetDistances();
 
             // 使用二维索引遍历
             for (int i = 0; i < nq; ++i) {
                 for (int j = 0; j < topk; ++j) {
                     ids_view(i, j) = vsag_ids[i * topk + j];
+                    dists_view(i, j) = vsag_dists[i * topk + j];
                 }
             }
         }
 
-        return ids;
+        return py::make_tuple(ids, dists);
     }
 
     py::object
@@ -268,7 +274,7 @@ PYBIND11_MODULE(_pyvsag, m) {
              py::arg("ids"),
              py::arg("num_elements"),
              py::arg("dim"))
-        .def("sparse_iv_build", &Index::SparseIVFBuild, py::arg("filename"))
+        .def("sparse_ivf_build", &Index::SparseIVFBuild, py::arg("filename"))
         .def(
             "knn_search", &Index::KnnSearch, py::arg("vector"), py::arg("k"), py::arg("parameters"))
         .def("batch_search",
@@ -277,7 +283,8 @@ PYBIND11_MODULE(_pyvsag, m) {
              py::arg("indptr"),
              py::arg("indices"),
              py::arg("data"),
-             py::arg("topk"))
+             py::arg("topk"),
+             py::arg("parameters"))
         .def("range_search",
              &Index::RangeSearch,
              py::arg("vector"),

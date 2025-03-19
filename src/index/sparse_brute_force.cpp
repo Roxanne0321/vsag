@@ -37,7 +37,7 @@ SparseComputeIP(const SparseVector& sv1, const SparseVector& sv2) {
     return -sum;
 }
 
-SparseBF::SparseBF(const SparseBFParameter& param, const IndexCommonParam& index_common_param) {
+SparseBF::SparseBF(const SparseBFParameters& param, const IndexCommonParam& index_common_param) {
     allocator_ = index_common_param.allocator_;
 }
 
@@ -48,8 +48,16 @@ SparseBF::build(const DatasetPtr& base) {
 
 std::vector<int64_t>
 SparseBF::add(const DatasetPtr& base) {
-    this->data_ = base->GetSparseVectors();
+    const SparseVector* sparse_ptr = base->GetSparseVectors();
     this->total_count_ = base->GetNumElements();
+    this->data_ = new SparseVector[this->total_count_];
+    for (size_t i = 0; i < this->total_count_; ++i) {
+        this->data_[i].dim_ = sparse_ptr[i].dim_;
+        this->data_[i].ids_ = new uint32_t[this->data_[i].dim_];
+        this->data_[i].vals_ = new float[this->data_[i].dim_];
+        memcpy(this->data_[i].ids_, sparse_ptr[i].ids_, this->data_[i].dim_ * sizeof(uint32_t));
+        memcpy(this->data_[i].vals_, sparse_ptr[i].vals_, this->data_[i].dim_ * sizeof(float));
+    }
 
     return {};
 }
@@ -59,6 +67,10 @@ SparseBF::knn_search(const DatasetPtr& query,
                       int64_t k,
                       const std::string& parameters,
                       const std::function<bool(int64_t)>& filter) const {
+    auto params = SparseBFSearchParameters::FromJson(parameters);
+    this->num_threads_ = params.num_threads;
+    //std::cout << "num_threads is : " << num_threads_ << std::endl;
+    
     uint32_t query_num = query->GetNumElements();
     auto dataset_results = Dataset::Make();
     dataset_results->Dim(query_num * k)
@@ -71,11 +83,17 @@ SparseBF::knn_search(const DatasetPtr& query,
 
     uint32_t dist_cmp = 0;
 
+    //int num_threads = omp_get_max_threads();
+    omp_set_num_threads(num_threads_);
+    #pragma omp parallel for
     for(int i = 0; i < query_num; ++i){
         uint32_t temp_cmp;
         auto query_vector = query->GetSparseVectors()[i];
         this->search_one_query(query_vector, k, ids + i * k, dists + i * k, temp_cmp);
-        dist_cmp += temp_cmp;
+        #pragma omp critical
+        {
+            dist_cmp += temp_cmp;
+        }
     }
 
     std::cout << "dist_cmp: " << dist_cmp << std::endl;

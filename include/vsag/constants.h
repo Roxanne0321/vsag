@@ -122,4 +122,18 @@ extern const char* const HGRAPH_PRECISE_QUANTIZATION_TYPE;
 extern const char* const BRUTE_FORCE_QUANTIZATION_TYPE;
 extern const char* const BRUTE_FORCE_IO_TYPE;
 
+// sparse params
+extern const char* const SPARSE_NUM_THREADS;
+extern const char* const QUERY_CUT;
+extern const char* const DOC_PRUNE_STRATEGY;
+extern const char* const PRUNE_TYPE;
+extern const char* const POSTING_LISTS;
+extern const char* const MAX_FRACTION;
+extern const char* const BUILD_STRATEGY;
+extern const char* const BUILD_TYPE;
+extern const char* const MIN_CLUSTER_SIZE;
+extern const char* const CENTROID_FRACTION;
+extern const char* const SUMMARY_ENERGY;
+extern const char* const HEAP_FACTOR;
+
 }  // namespace vsag

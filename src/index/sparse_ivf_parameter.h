@@ -16,17 +16,74 @@
 #pragma once
 #include "parameter.h"
 #include "typing.h"
+#include "index_common_param.h"
 
 namespace vsag {
-class SparseIVFParameter : public Parameter {
+enum class DocPruneStrategyType {
+    NotPrune,
+    FixedSize,
+    GlobalPrune
+};
+
+struct FixedSize {
+    int n_postings;
+};
+
+struct GlobalPrune {
+    int n_postings;
+    float fraction;
+};
+
+struct DocPruneStrategy {
+    DocPruneStrategyType type;
+    union {
+        FixedSize fixedSize;
+        GlobalPrune globalPrune;
+    } parameters;
+};
+
+enum class BuildStrategyType {
+    NotKmeans,
+    Kmeans
+};
+
+struct Kmeans {
+    int min_cluster_size;
+    float centroid_fraction;
+    float summary_energy;
+};
+
+struct BuildStrategy {
+    BuildStrategyType type;
+    Kmeans kmeans;
+};
+
+struct SparseIVFParameters{
 public:
-    explicit SparseIVFParameter() {}
+    static SparseIVFParameters
+    FromJson(JsonType& sparse_ivf_param_obj, IndexCommonParam index_common_param);
 
-    void
-    FromJson(const JsonType& json) override;
+public:
+    DocPruneStrategy prune_strategy;
+    BuildStrategy build_strategy;
 
-    JsonType
-    ToJson() override;
+protected:
+    SparseIVFParameters() = default;
+};
+
+struct SparseIVFSearchParameters{
+public:
+    static SparseIVFSearchParameters
+    FromJson(const std::string& json_string);
+
+public:
+    // required vars
+   int num_threads{1};
+   float heap_factor{0.0};
+   size_t query_cut{0};
+
+protected:
+    SparseIVFSearchParameters() = default;
 };
 
 }  // namespace vsag

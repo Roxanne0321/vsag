@@ -16,17 +16,29 @@
 #pragma once
 #include "parameter.h"
 #include "typing.h"
+#include "index_common_param.h"
 
 namespace vsag {
-class SparseBFParameter : public Parameter {
+struct SparseBFParameters{
 public:
-    explicit SparseBFParameter() {}
+    static SparseBFParameters
+    FromJson(JsonType& sparse_bf_param_obj, IndexCommonParam index_common_param);
 
-    void
-    FromJson(const JsonType& json) override;
+protected:
+    SparseBFParameters() = default;
+};
 
-    JsonType
-    ToJson() override;
+struct SparseBFSearchParameters{
+public:
+    static SparseBFSearchParameters
+    FromJson(const std::string& json_string);
+
+public:
+    // required vars
+   int num_threads{0};
+
+protected:
+    SparseBFSearchParameters() = default;
 };
 
 }  // namespace vsag
