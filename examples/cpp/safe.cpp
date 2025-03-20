@@ -111,7 +111,7 @@ int
 main(int argc, char** argv) {
     vsag::init();
 
-    std::string basefile = "data/safe/bge_safe_doc.csr";
+    std::string basefile = "data/splade/base_small.csr";
 
     std::pair<vsag::SparseVector*, int64_t> base_results;
 
@@ -129,10 +129,15 @@ main(int argc, char** argv) {
         "dim": 30000,
         "sparse_ivf": {
             "doc_prune_strategy": {
-                "prune_type": "NotPrune"
+                "prune_type": "GlobalPrune",
+                "num_postings": 150,
+                "max_fraction": 1.5
             },
             "build_strategy": {
-               "build_type": "NotKmeans"
+               "build_type": "Kmeans",
+                "centroid_fraction": 0.1,
+                "min_cluster_size": 2,
+                "summary_energy": 0.6
             }
         }
     }
@@ -148,7 +153,7 @@ main(int argc, char** argv) {
         exit(-1);
     }
 
-    std::string queryfile = "data/safe/bge_safe_query.csr";
+    std::string queryfile = "data/splade/queries.dev.csr";
 
     std::pair<vsag::SparseVector*, int64_t> query_results;
 
@@ -169,12 +174,12 @@ main(int argc, char** argv) {
     int64_t topk = 10;
     auto result = index->KnnSearch(query, topk, sparse_ivf_search_parameters).value();
 
-    std::string gtfile = "data/safe/bge_safe_recall.dev.gt";
+    /* std::string gtfile = "data/safe/bge_safe_recall.dev.gt";
 
     auto gt_results = knn_result_read(gtfile);
 
     float recall = cal_recall(result->GetIds(), gt_results.data(), result->GetDim());
-    std::cout << "recall is : " << recall << std::endl;
+    std::cout << "recall is : " << recall << std::endl; */
 
     return 0;
 }

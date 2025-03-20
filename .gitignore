@@ -160,6 +160,8 @@ flycheck_*.el
 .dir-locals.el
 /network-security.data
 
+
+
 # vsag
 _deps
 /build/
@@ -187,3 +189,6 @@ data/
 /coverage-report/
 /coverage/
 *.gcov
+
+#experiments results
+results/

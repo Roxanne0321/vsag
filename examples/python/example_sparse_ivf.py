@@ -290,9 +290,9 @@ def query_cut_test():
             })
 
     #safe
-    query_cuts_1 = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    query_cuts_1 = [4, 5, 6, 7, 8, 9, 10, 11, 12]
     #small
-    query_cuts_2 = [2, 3, 4, 5, 6, 7, 8, 9]
+    query_cuts_2 = [3, 4, 5, 6, 7, 8, 9]
     all_query_cuts = [query_cuts_1, query_cuts_2]
 
     for (i, basefile) in enumerate(basefiles):
@@ -425,7 +425,10 @@ def safe_test():
                         "prune_type": "NotPrune"
                     },
                     "build_strategy": {
-                        "build_type": "NotKmeans"
+                        "build_type": "Kmeans",
+                        "centroid_fraction": 0.1,
+                        "min_cluster_size": 2,
+                        "summary_energy": 0.6
                     }
                 }
             })
@@ -437,7 +440,7 @@ def safe_test():
 
     search_params = json.dumps({
                 "sparse_ivf": {
-                    "query_cut": 7,
+                    "query_cut": 0,
                     "num_threads": 104,
                     "heap_factor": 0
                  }
@@ -452,30 +455,163 @@ def safe_test():
     recall = cal_recall(ids, dists, gt_ids, gt_dists, sizes[0], topk)
     print(f"recall is {recall}")
 
+def doc_query_cut_safe():
+    # Data file
+    basefile = "/root/support-sparse-dataset/data/safe/bge_safe_doc.csr"
+    queryfile = "/root/support-sparse-dataset/data/safe/bge_safe_query.csr"
+    gtfile = "/root/support-sparse-dataset/data/safe/bge_safe_recall.dev.gt"
+    recall_file = "/root/support-sparse-dataset/results/doc_query/safe_recall.pkl"
+    qps_file = "/root/support-sparse-dataset/results/doc_query/safe_qps.pkl"
+
+    topk = 10
+
+    num_postings = [100, 150, 200, 250, 300]
+    query_cuts = [4, 9, 13]
+
+    all_recall = []
+    all_qps = []
+
+    sizes, data, indices, indptr = read_sparse_matrix_fields(queryfile)
+    gt_ids, gt_dists = knn_result_read(gtfile)
+
+    for num_posting in num_postings:
+        for query_cut in query_cuts:
+            index_params = json.dumps({
+                "dtype": "float32",
+                "metric_type": "ip",
+                "dim": 30000,
+                "sparse_ivf": {
+                    "doc_prune_strategy": {
+                        "prune_type": "GlobalPrune",
+                        "num_postings": num_posting,
+                        "max_fraction": 1.5
+                    },
+                    "build_strategy": {
+                        "build_type": "NotKmeans"
+                    }
+                }
+            })
+
+            search_params = json.dumps({
+                "sparse_ivf": {
+                    "query_cut": query_cut,
+                    "num_threads": 104,
+                    "heap_factor": 0
+                 }
+            })
+
+            print(f"Building sparse IVF index for {basefile} with num_postings {num_posting}")
+
+            index = pyvsag.Index("sparse_ivf", index_params)
+            index.sparse_ivf_build(basefile)
+
+            print(f"  Testing with query_cut = {query_cut}")
+            # Perform search
+            begin_time = time.time()
+            ids, dists = index.batch_search(sizes[0], indptr, indices, data, topk, search_params)
+            end_time = time.time()
+            qps = sizes[0] / (end_time - begin_time)
+            all_qps.append(qps)
+            recall = cal_recall(ids, dists, gt_ids, gt_dists, sizes[0], topk)
+            all_recall.append(recall)
+
+    save_list_to_pickle(all_qps, qps_file)
+    save_list_to_pickle(all_recall, recall_file)
+
+
+def doc_query_cut_base_small():
+    # Data file
+    basefile = "/root/support-sparse-dataset/data/splade/base_small.csr"
+    queryfile = "/root/support-sparse-dataset/data/splade/queries.dev.csr"
+    gtfile = "/root/support-sparse-dataset/data/splade/base_small.dev.gt"
+    recall_file = "/root/support-sparse-dataset/results/doc_query/base_small_recall.pkl"
+    qps_file = "/root/support-sparse-dataset/results/doc_query/base_small_qsp.pkl"
+
+    topk = 10
+
+    num_postings = [200, 400, 700]
+    query_cuts = [3, 6, 9]
+
+    all_recall = []
+    all_qps = []
+
+    sizes, data, indices, indptr = read_sparse_matrix_fields(queryfile)
+    gt_ids, gt_dists = knn_result_read(gtfile)
+
+    for num_posting in num_postings:
+        for query_cut in query_cuts:
+            index_params = json.dumps({
+                "dtype": "float32",
+                "metric_type": "ip",
+                "dim": 30000,
+                "sparse_ivf": {
+                    "doc_prune_strategy": {
+                        "prune_type": "GlobalPrune",
+                        "num_postings": num_posting,
+                        "max_fraction": 1.5
+                    },
+                    "build_strategy": {
+                        "build_type": "NotKmeans"
+                    }
+                }
+            })
+
+            search_params = json.dumps({
+                "sparse_ivf": {
+                    "query_cut": query_cut,
+                    "num_threads": 104,
+                    "heap_factor": 0
+                 }
+            })
+
+            print(f"Building sparse IVF index for {basefile} with num_postings {num_posting}")
+
+            index = pyvsag.Index("sparse_ivf", index_params)
+            index.sparse_ivf_build(basefile)
+
+            print(f"  Testing with query_cut = {query_cut}")
+            # Perform search
+            begin_time = time.time()
+            ids, dists = index.batch_search(sizes[0], indptr, indices, data, topk, search_params)
+            end_time = time.time()
+            qps = sizes[0] / (end_time - begin_time)
+            all_qps.append(qps)
+            recall = cal_recall(ids, dists, gt_ids, gt_dists, sizes[0], topk)
+            all_recall.append(recall)
+
+    save_list_to_pickle(all_qps, qps_file)
+    save_list_to_pickle(all_recall, recall_file)
 
 
 def vsag_test_safe():
     # Data file
-    b1 = "/root/support-sparse-dataset/data/safe/bge_safe_doc.csr"
-    q1 = "/root/support-sparse-dataset/data/safe/bge_safe_query.csr"
-    g1 = "/root/support-sparse-dataset/data/safe/bge_safe_recall.dev.gt"
-    recall_file1 = "/root/support-sparse-dataset/results/vsag/safe_recall.pkl"
-    qps_file1 = "/root/support-sparse-dataset/results/vsag/safe_qps.pkl"
-    basefiles = [b1]
-    queryfiles = [q1]
-    gtfiles = [g1]
-    recall_files = [recall_file1]
-    qps_files = [qps_file1]
+    basefile = "/root/support-sparse-dataset/data/safe/bge_safe_doc.csr"
+    queryfile = "/root/support-sparse-dataset/data/safe/bge_safe_query.csr"
+    gtfile = "/root/support-sparse-dataset/data/safe/bge_safe_recall.dev.gt"
+    recall_file = "/root/support-sparse-dataset/results/vsag/safe_recall.pkl"
+    qps_file = "/root/support-sparse-dataset/results/vsag/safe_qps.pkl"
+
+    sizes, data, indices, indptr = read_sparse_matrix_fields(queryfile)
+    gt_ids, gt_dists = knn_result_read(gtfile)
+
+    num_postings = [150, 210, 270]
+    heap_factors = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+    query_cuts = [8, 10, 12]
 
     topk = 10
-    index_params = json.dumps({
+
+    all_recall = []
+    all_qps = []
+
+    for num_posting in num_postings:
+        index_params = json.dumps({
                 "dtype": "float32",
                 "metric_type": "ip",
                 "dim": 30000,
                 "sparse_ivf": {
                     "doc_prune_strategy": {
                         "prune_type": "GlobalPrune",
-                        "num_postings": 150,
+                        "num_postings": num_posting,
                         "max_fraction": 1.5
                     },
                     "build_strategy": {
@@ -485,67 +621,66 @@ def vsag_test_safe():
                         "summary_energy": 0.6
                     }
                 }
-            })
+        })
 
-    heap_factors = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
-
-    for (i, basefile) in enumerate(basefiles):
-        all_recall = []
-        all_qps = []
-        queryfile = queryfiles[i]
-        sizes, data, indices, indptr = read_sparse_matrix_fields(queryfile)
-        gtfile = gtfiles[i]
-        gt_ids, gt_dists = knn_result_read(gtfile)
-
-        print(f"Building sparse IVF index for {basefile}")
+        print(f"Building sparse IVF index for {basefile} with num postings = {num_posting}")
 
         index = pyvsag.Index("sparse_ivf", index_params)
         index.sparse_ivf_build(basefile)
 
         for heap_factor in heap_factors:
-            search_params = json.dumps({
-                "sparse_ivf": {
-                    "query_cut": 7,
-                    "num_threads": 104,
-                    "heap_factor": heap_factor
-                 }
-            })
+            for query_cut in query_cuts:
+                search_params = json.dumps({
+                    "sparse_ivf": {
+                        "query_cut": query_cut,
+                        "num_threads": 104,
+                        "heap_factor": heap_factor
+                    }
+                })
 
-            print(f"  Testing with heap factor = {heap_factor}")
-            # Perform search
-            begin_time = time.time()
-            ids, dists = index.batch_search(sizes[0], indptr, indices, data, topk, search_params)
-            end_time = time.time()
-            qps = sizes[0] / (end_time - begin_time)
-            all_qps.append(qps)
-            recall = cal_recall(ids, dists, gt_ids, gt_dists, sizes[0], topk)
-            all_recall.append(recall)
+                print(f"  Testing with heap factor = {heap_factor} and query cut = {query_cut}")
+                # Perform search
+                begin_time = time.time()
+                ids, dists = index.batch_search(sizes[0], indptr, indices, data, topk, search_params)
+                end_time = time.time()
+                qps = sizes[0] / (end_time - begin_time)
+                all_qps.append(qps)
+                recall = cal_recall(ids, dists, gt_ids, gt_dists, sizes[0], topk)
+                all_recall.append(recall)
 
-        save_list_to_pickle(all_qps, qps_files[i])
-        save_list_to_pickle(all_recall, recall_files[i])
+    save_list_to_pickle(all_qps, qps_file)
+    save_list_to_pickle(all_recall, recall_file)
+    
 
 def vsag_test_base_small():
     # Data file
-    b2 = "/root/support-sparse-dataset/data/splade/base_small.csr"
-    q2 = "/root/support-sparse-dataset/data/splade/queries.dev.csr"
-    g2 = "/root/support-sparse-dataset/data/splade/base_small.dev.gt"
-    recall_file2 = "/root/support-sparse-dataset/results/vsag/base_small_recall.pkl"
-    qps_file2 = "/root/support-sparse-dataset/results/vsag/base_small_qsp.pkl"
-    basefiles = [b2]
-    queryfiles = [q2]
-    gtfiles = [g2]
-    recall_files = [recall_file2]
-    qps_files = [qps_file2]
+    basefile = "/root/support-sparse-dataset/data/splade/base_small.csr"
+    queryfile = "/root/support-sparse-dataset/data/splade/queries.dev.csr"
+    gtfile = "/root/support-sparse-dataset/data/splade/base_small.dev.gt"
+    recall_file = "/root/support-sparse-dataset/results/vsag/base_small_recall.pkl"
+    qps_file = "/root/support-sparse-dataset/results/vsag/base_small_qsp.pkl"
+
+    sizes, data, indices, indptr = read_sparse_matrix_fields(queryfile)
+    gt_ids, gt_dists = knn_result_read(gtfile)
+
+    num_postings = [700]
+    heap_factors = [0.1, 0.4, 0.7]
+    query_cuts = [3, 6, 9]
 
     topk = 10
-    index_params = json.dumps({
+
+    all_recall = []
+    all_qps = []
+
+    for num_posting in num_postings:
+        index_params = json.dumps({
                 "dtype": "float32",
                 "metric_type": "ip",
                 "dim": 30000,
                 "sparse_ivf": {
                     "doc_prune_strategy": {
                         "prune_type": "GlobalPrune",
-                        "num_postings": 500,
+                        "num_postings": num_posting,
                         "max_fraction": 1.5
                     },
                     "build_strategy": {
@@ -555,47 +690,38 @@ def vsag_test_base_small():
                         "summary_energy": 0.6
                     }
                 }
-            })
+        })
 
-    heap_factors = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
-
-    for (i, basefile) in enumerate(basefiles):
-        all_recall = []
-        all_qps = []
-        queryfile = queryfiles[i]
-        sizes, data, indices, indptr = read_sparse_matrix_fields(queryfile)
-        gtfile = gtfiles[i]
-        gt_ids, gt_dists = knn_result_read(gtfile)
-
-        print(f"Building sparse IVF index for {basefile}")
+        print(f"Building sparse IVF index for {basefile} with num postings = {num_posting}")
 
         index = pyvsag.Index("sparse_ivf", index_params)
         index.sparse_ivf_build(basefile)
 
         for heap_factor in heap_factors:
-            search_params = json.dumps({
-                "sparse_ivf": {
-                    "query_cut": 5,
-                    "num_threads": 104,
-                    "heap_factor": heap_factor
-                 }
-            })
+            for query_cut in query_cuts:
+                search_params = json.dumps({
+                    "sparse_ivf": {
+                        "query_cut": query_cut,
+                        "num_threads": 1,
+                        "heap_factor": heap_factor
+                    }
+                })
 
-            print(f"  Testing with heap factor = {heap_factor}")
-            # Perform search
-            begin_time = time.time()
-            ids, dists = index.batch_search(sizes[0], indptr, indices, data, topk, search_params)
-            end_time = time.time()
-            qps = sizes[0] / (end_time - begin_time)
-            all_qps.append(qps)
-            recall = cal_recall(ids, dists, gt_ids, gt_dists, sizes[0], topk)
-            all_recall.append(recall)
+                print(f"  Testing with heap factor = {heap_factor} and query cut = {query_cut}")
+                # Perform search
+                begin_time = time.time()
+                ids, dists = index.batch_search(sizes[0], indptr, indices, data, topk, search_params)
+                end_time = time.time()
+                qps = sizes[0] / (end_time - begin_time)
+                all_qps.append(qps)
+                recall = cal_recall(ids, dists, gt_ids, gt_dists, sizes[0], topk)
+                all_recall.append(recall)
 
-        save_list_to_pickle(all_qps, qps_files[i])
-        save_list_to_pickle(all_recall, recall_files[i])
+    save_list_to_pickle(all_qps, qps_file)
+    save_list_to_pickle(all_recall, recall_file)
 
 if __name__ == '__main__':
-    safe_test()
+    vsag_test_base_small()
 
 """
 using non_recursive_mutex = std::mutex;

@@ -76,6 +76,7 @@ SparseIVF::SparseIVF(const SparseIVFParameters& param, const IndexCommonParam& i
 
 std::vector<int64_t>
 SparseIVF::build(const DatasetPtr& base) {
+    this->data_dim_ = 0;
     //// copy base dataset
     const SparseVector* sparse_ptr = base->GetSparseVectors();
     this->total_count_ = base->GetNumElements();
@@ -87,7 +88,7 @@ SparseIVF::build(const DatasetPtr& base) {
         }
 
         if (sv.ids_[sv.dim_ - 1] > this->data_dim_) {
-            this->data_dim_ = sv.ids_[sv.dim_ - 1] + 1;
+            this->data_dim_ = sv.ids_[sv.dim_ - 1];
         }
 
         this->data_[i].dim_ = sv.dim_;
@@ -96,6 +97,8 @@ SparseIVF::build(const DatasetPtr& base) {
         memcpy(this->data_[i].ids_, sv.ids_, this->data_[i].dim_ * sizeof(uint32_t));
         memcpy(this->data_[i].vals_, sv.vals_, this->data_[i].dim_ * sizeof(float));
     }
+
+    this->data_dim_ += 1;
 
     ivf_mutex = std::vector<std::mutex>(this->data_dim_);
 
@@ -145,15 +148,16 @@ SparseIVF::build_inverted_lists(
             }
         }
     }
-    /*     for (uint32_t i = 0; i < this->data_dim_; ++i) {
-        std::cout << "inverted list " << i << std::endl;
+    //     for (uint32_t i = 0; i < this->data_dim_; ++i) {
+/*     int i = 32;
+        std::cout << "inverted list " << i << " has " << this->inverted_lists_[i].doc_num_ << " docs" << std::endl;
         if (this->inverted_lists_[i].doc_num_ != 0) {
             for(auto j = 0; j < this->inverted_lists_[i].doc_num_ ; j++) {
                 std::cout << this->inverted_lists_[i].ids_[j] << " ";
             }
             std::cout << std::endl;
-        }
-    } */
+        } */
+    //} 
 }
 
 void
@@ -173,9 +177,9 @@ SparseIVF::build_posting_lists(
             /* int thread_id = omp_get_thread_num();
             int total_threads = omp_get_num_threads();
             printf("build list %d on thread %d of %d\n", i, thread_id, total_threads);  */
-            if (i % 1000 == 0) {
+             /* if (i % 1000 == 0) {
                 std::cout << i << std::endl;
-            }
+            }  */
             const auto& doc_infos = it->second;
             uint32_t doc_num = static_cast<uint32_t>(doc_infos.size());
 
@@ -213,9 +217,10 @@ SparseIVF::build_posting_list(const std::vector<uint32_t>& posting_ids, uint32_t
             continue;
         }
         reordered_posting_ids.insert(reordered_posting_ids.end(), cluster.begin(), cluster.end());
-        block_offsets.emplace_back(cluster.size());
+        block_offsets.emplace_back(reordered_posting_ids.size());
         //std::cout << cluster.size() << " ";
     }
+
     //std::cout << std::endl;
 
     assert(posting_ids.size() == reordered_posting_ids.size());
@@ -472,14 +477,14 @@ SparseIVF::knn_search(const DatasetPtr& query,
     auto* dists = (float*)allocator_->Allocate(sizeof(float) * query_num * k);
     dataset_results->Distances(dists);
 
-    uint32_t dist_cmp = 0;
+    //uint32_t dist_cmp = 0;
 
     // int num_threads = omp_get_max_threads();
     omp_set_num_threads(num_threads_);
     //std::cout << "Number of threads: " << omp_get_max_threads() << std::endl;
 
     if (this->build_strategy_.type == BuildStrategyType::NotKmeans) {
-#pragma omp parallel for
+        #pragma omp parallel for
         for (int i = 0; i < query_num; ++i) {
             /* int thread_id = omp_get_thread_num();
         int total_threads = omp_get_num_threads();
@@ -487,25 +492,28 @@ SparseIVF::knn_search(const DatasetPtr& query,
             uint32_t temp_cmp;
             auto query_vector = query->GetSparseVectors()[i];
             this->search_one_query(query_vector, k, ids + i * k, dists + i * k, temp_cmp);
-#pragma omp critical
+             /* #pragma omp critical
             {
                 dist_cmp += temp_cmp;
-            }
+            }  */
         }
     } else {
-#pragma omp parallel for
+        #pragma omp parallel for
         for (int i = 0; i < query_num; ++i) {
             /* int thread_id = omp_get_thread_num();
         int total_threads = omp_get_num_threads();
         printf("Processing query %d on thread %d of %d\n", i, thread_id, total_threads);  */
+            /* if(i % 1000 == 0) {
+                std::cout << "query " << i << std::endl;
+            } */
             uint32_t temp_cmp;
             auto query_vector = query->GetSparseVectors()[i];
             this->search_one_query_with_kmeans(
                 query_vector, k, ids + i * k, dists + i * k, temp_cmp);
-#pragma omp critical
+            /* #pragma omp critical
             {
                 dist_cmp += temp_cmp;
-            }
+            }  */
         }
     }
 
@@ -545,6 +553,11 @@ SparseIVF::search_one_query(const SparseVector& query_vector,
     for (uint32_t i = 0; i < query_pair.size(); ++i) {
         uint32_t term_id = query_pair[i].first;
         auto term_doc_num = this->inverted_lists_[term_id].doc_num_;
+
+        if (term_doc_num == 0) {
+            continue;
+        }
+
         for (uint32_t j = 0; j < term_doc_num; ++j) {
             auto doc_id = this->inverted_lists_[term_id].ids_[j];
 
@@ -565,6 +578,11 @@ SparseIVF::search_one_query(const SparseVector& query_vector,
             }
             cur_heap_top = heap.top().first;
         }
+        /* std::cout << "term id: " << term_id << " has " << visited_doc_ids.size() << " visited doc ids : " << std::endl;
+        for (const auto& id : visited_doc_ids) {
+            std::cout << id << " ";
+        }
+        std::cout << std::endl; */
     }
 
     for (auto j = static_cast<int64_t>(heap.size() - 1); j >= 0; --j) {
@@ -580,24 +598,12 @@ SparseIVF::search_one_query_with_kmeans(const SparseVector& query_vector,
                                         int64_t* res_ids,
                                         float* res_dists,
                                         uint32_t& dist_cmp) const {
-    SparseVector qv;
+    std::vector<std::pair<uint32_t, float>> query_pair;
+    for (uint32_t i = 0; i < query_vector.dim_; ++i) {
+        query_pair.emplace_back(query_vector.ids_[i], query_vector.vals_[i]);
+    }
 
-    if (query_cut_ == 0) {
-        for (uint32_t j = 1; j < query_vector.dim_; ++j) {
-            assert(query_vector.ids_[j - 1] <= query_vector.ids_[j] &&
-                   "IDs are not in ascending order");
-        }
-        qv.dim_ = query_vector.dim_;
-        qv.ids_ = new uint32_t[qv.dim_];
-        qv.vals_ = new float[qv.dim_];
-        std::memcpy(qv.ids_, query_vector.ids_, qv.dim_ * sizeof(uint32_t));
-        std::memcpy(qv.vals_, query_vector.vals_, qv.dim_ * sizeof(float));
-    } else {
-        std::vector<std::pair<uint32_t, float>> query_pair;
-        for (uint32_t i = 0; i < query_vector.dim_; ++i) {
-            query_pair.emplace_back(query_vector.ids_[i], query_vector.vals_[i]);
-        }
-
+    if (query_cut_ > 0) {
         std::sort(query_pair.begin(),
                   query_pair.end(),
                   [](const std::pair<uint32_t, float> a, const std::pair<uint32_t, float> b) {
@@ -607,20 +613,6 @@ SparseIVF::search_one_query_with_kmeans(const SparseVector& query_vector,
         if (query_vector.dim_ > query_cut_) {
             query_pair.resize(this->query_cut_);
         }
-
-        std::sort(query_pair.begin(),
-                  query_pair.end(),
-                  [](const std::pair<uint32_t, float> a, const std::pair<uint32_t, float> b) {
-                      return a.first < b.first;
-                  });
-
-        qv.dim_ = query_pair.size();
-        qv.ids_ = new uint32_t[qv.dim_];
-        qv.vals_ = new float[qv.dim_];
-        for (uint32_t i = 0; i < qv.dim_; ++i) {
-            qv.ids_[i] = query_pair[i].first;
-            qv.vals_[i] = query_pair[i].second;
-        }
     }
 
     MaxHeap heap(this->allocator_.get());
@@ -629,41 +621,49 @@ SparseIVF::search_one_query_with_kmeans(const SparseVector& query_vector,
     std::unordered_set<uint32_t> visited_doc_ids;
     dist_cmp = 0;
 
-    for (uint32_t i = 0; i < qv.dim_; ++i) {
-        auto term_id = qv.ids_[i];
-        if (this->posting_lists_[term_id].doc_num_ > 0) {
-            auto dots = this->posting_lists_[term_id].summaries.matmul_with_query(
-                qv.ids_, qv.vals_, qv.dim_);
+    for (uint32_t i = 0; i < query_pair.size(); ++i) {
+        uint32_t term_id = query_pair[i].first;
 
-            for (auto block_id = 0; block_id < this->posting_lists_[term_id].num_clusters_;
-                 ++block_id) {
-                if (heap.size() == k && dots[block_id] < -heap_factor_ * heap.top().first) {
+        if (this->posting_lists_[term_id].doc_num_ == 0) {
+            continue;
+        }
+
+        auto dots = this->posting_lists_[term_id].summaries.matmul_with_query(
+            query_vector.ids_, query_vector.vals_, query_vector.dim_);
+
+        for (auto block_id = 0; block_id < this->posting_lists_[term_id].num_clusters_;
+             ++block_id) {
+            if (heap.size() == k && dots[block_id] < -heap_factor_ * heap.top().first) {
+                continue;
+            }
+            for (uint32_t j = this->posting_lists_[term_id].block_offsets[block_id];
+                 j < this->posting_lists_[term_id].block_offsets[block_id + 1];
+                 ++j) {
+                auto doc_id = this->posting_lists_[term_id].postings[j];
+                if (visited_doc_ids.find(doc_id) != visited_doc_ids.end()) {
                     continue;
                 }
-                for (uint32_t j = this->posting_lists_[term_id].block_offsets[block_id];
-                     j < this->posting_lists_[term_id].block_offsets[block_id + 1];
-                     ++j) {
-                    auto doc_id = this->posting_lists_[term_id].postings[j];
-                    if (visited_doc_ids.find(doc_id) != visited_doc_ids.end()) {
-                        continue;
-                    }
-                    visited_doc_ids.insert(doc_id);
+                visited_doc_ids.insert(doc_id);
 
-                    //std::cout << "term id: " << term_id <<" num_clusters: " << this->posting_lists_[term_id].num_clusters_ << " block id :" << block_id << " j: " << j <<std::endl;
-                    SparseVector sv = this->data_[doc_id];
-                    float dist = SparseComputeIP(sv, qv);
-                    dist_cmp++;
+                //std::cout << "term id: " << term_id <<" num_clusters: " << this->posting_lists_[term_id].num_clusters_ << " block id :" << block_id << " j: " << j <<std::endl;
+                SparseVector sv = this->data_[doc_id];
+                float dist = SparseComputeIP(sv, query_vector);
+                dist_cmp++;
 
-                    if (heap.size() < k or dist < cur_heap_top) {
-                        heap.emplace(dist, doc_id);
-                    }
-                    if (heap.size() > k) {
-                        heap.pop();
-                    }
-                    cur_heap_top = heap.top().first;
+                if (heap.size() < k or dist < cur_heap_top) {
+                    heap.emplace(dist, doc_id);
                 }
+                if (heap.size() > k) {
+                    heap.pop();
+                }
+                cur_heap_top = heap.top().first;
             }
         }
+        /* std::cout << "term id: " << term_id << " has " << visited_doc_ids.size() << " visited doc ids : " << std::endl;
+        for (const auto& id : visited_doc_ids) {
+            std::cout << id << " ";
+        }
+        std::cout << std::endl; */
     }
 
     for (auto j = static_cast<int64_t>(heap.size() - 1); j >= 0; --j) {
@@ -671,13 +671,12 @@ SparseIVF::search_one_query_with_kmeans(const SparseVector& query_vector,
         res_ids[j] = heap.top().second;
         heap.pop();
     }
-    delete[] qv.ids_;
-    delete[] qv.vals_;
 }
 
 void
 SparseIVF::print_posting_lists() {
-    for (size_t i = 0; i < 10; ++i) {
+    //for (size_t i = 0; i < 10; ++i) {
+    int i = 32;
         std::cout << "PostingList " << i << ":" << std::endl;
         std::cout << "  doc_num_: " << posting_lists_[i].doc_num_ << std::endl;
 
@@ -702,7 +701,7 @@ SparseIVF::print_posting_lists() {
         } else {
             std::cout << "  block_offsets: nullptr" << std::endl;
         }
-    }
+   //}
 }
 
 }  // namespace vsag
