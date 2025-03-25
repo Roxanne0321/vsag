@@ -648,8 +648,8 @@ def vsag_test_safe():
                 recall = cal_recall(ids, dists, gt_ids, gt_dists, sizes[0], topk)
                 all_recall.append(recall)
 
-    save_list_to_pickle(all_qps, qps_file)
-    save_list_to_pickle(all_recall, recall_file)
+    #save_list_to_pickle(all_qps, qps_file)
+    #save_list_to_pickle(all_recall, recall_file)
     
 
 def vsag_test_base_small():
