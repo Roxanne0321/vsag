@@ -191,4 +191,5 @@ data/
 *.gcov
 
 #experiments results
-results/results/
+/results/
+/experiments/
