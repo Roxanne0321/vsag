@@ -18,12 +18,11 @@
 #include "base_filter_functor.h"
 #include "common.h"
 #include "safe_allocator.h"
-#include "sparse_ivf_parameter.h"
+#include "sparse_ipivf_parameter.h"
 #include "stream_reader.h"
 #include "stream_writer.h"
 #include "typing.h"
 #include "vsag/index.h"
-#include "algorithm/seismic/summary.h"
 #include <iostream>
 #include <omp.h>
 #include <algorithm>
@@ -31,36 +30,18 @@
 #include <fstream>
 
 namespace vsag {
-class SparseIVF : public Index {
+class SparseIPIVF : public Index {
 public:
-    SparseIVF(const SparseIVFParameters& param, const IndexCommonParam& index_common_param);
-    ~SparseIVF() {
+    SparseIPIVF(const SparseIPIVFParameters& param, const IndexCommonParam& index_common_param);
+    ~SparseIPIVF() {
      if (this->inverted_lists_) {
         for (int i = 0; i < this->data_dim_; ++i) {
-            if (this->inverted_lists_[i].ids_) {
-                //std::cout << this->inverted_lists_[i].doc_num_ << std::endl;
-                //this->allocator_->Deallocate(this->inverted_lists_[i].ids_);
+            if (this->inverted_lists_[i].doc_num_ != 0) {
                 delete[] this->inverted_lists_[i].ids_;
+                delete[] this->inverted_lists_[i].vals_;
                 }
             }
         delete[] this->inverted_lists_;
-     }
-
-    if(this->posting_lists_) {
-        for(int i = 0; i < this->data_dim_; ++i) {
-            if (this->posting_lists_[i].doc_num_ != 0) {
-                delete[] this->posting_lists_[i].block_offsets;
-                delete[] this->posting_lists_[i].postings;
-            }
-        }
-    }
-
-     if (this->data_){
-        for(int i = 0; i < this->total_count_; i++) {
-            delete[] this->data_[i].ids_;
-            delete[] this->data_[i].vals_;
-        }
-        delete[] this->data_;
      }
 
     for(auto &lock : ivf_mutex) {
@@ -166,32 +147,17 @@ public:
     }
 
 private:
-    std::vector<uint32_t>
-    get_top_n_indices(const SparseVector& vec, uint32_t n);
-
     std::vector<int64_t>
     build(const DatasetPtr& data);
 
-    void
-    build_posting_lists(const std::unordered_map <uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
-
-    void
-    build_inverted_lists(const std::unordered_map <uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
-
-    void
-    build_posting_list(const std::vector<uint32_t>& posting_list, uint32_t dim);
-
-    void
-    do_kmeans_on_doc_id(std::vector<uint32_t> posting_ids, std::vector<std::vector<uint32_t>>& clusters, int n_centroids);
+    std::vector<uint32_t>
+    get_top_n_indices(const SparseVector& vec, uint32_t n);
 
     void
     fixed_pruning(std::unordered_map <uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map, int n_postings);
 
     void
     global_pruning(std::unordered_map <uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map, int n_postings);
-
-    void
-    energy_preserving_summary(std::vector<uint32_t>& ids, std::vector<float>& vals, std::vector<uint32_t> block, float fraction);
 
     DatasetPtr
     knn_search(const DatasetPtr& query,
@@ -203,61 +169,29 @@ private:
     search_one_query(const SparseVector& query_vector,
                      int64_t k,
                      int64_t* res_ids,
-                     float* res_dists,
-                     uint32_t& dist_cmp) const;
-
-    void
-    search_one_query_with_kmeans(const SparseVector& query_vector,
-                     int64_t k,
-                     int64_t* res_ids,
-                     float* res_dists,
-                     uint32_t& dist_cmp) const;
-
-    
+                     float* res_dists) const;
 
     uint64_t
     cal_serialize_size() const {
         return 0;
     }
 
-    uint64_t cal_and_save_ivf_size();
-
-    void save_inverted_index();
-
-    void print_posting_lists();
-
 private:
     struct InvertedList {
         uint32_t doc_num_{0};
         uint32_t* ids_{nullptr};
-    };
-
-    struct PostingList {
-        uint32_t doc_num_{0};
-        uint32_t num_clusters_{0};
-        uint32_t* postings{nullptr};
-        uint32_t * block_offsets{nullptr};
-        QuantizedSummary summaries;
+        float* vals_{nullptr};
     };
 
     uint32_t data_dim_{0};
-    uint32_t unique_dim_{0};
     uint32_t total_count_{0};
     std::shared_ptr<Allocator> allocator_{nullptr};
-    SparseVector* data_;
     InvertedList* inverted_lists_{nullptr};
-    PostingList* posting_lists_{nullptr};
 
 //parameters
-    mutable size_t query_cut_;
     mutable int num_threads_;
-    mutable float heap_factor_;
     DocPruneStrategy doc_prune_strategy_;
-    BuildStrategy build_strategy_;
     VectorPruneStrategy vector_prune_strategy_;
-    std::string ivf_size_file_;
-    std::string index_file_;
-
 //mutex
     std::vector<std::mutex> ivf_mutex;
 };

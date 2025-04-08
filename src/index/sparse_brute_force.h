@@ -16,13 +16,9 @@
 
 #include "vsag/index.h"
 #include "../utils.h"
-#include "vsag/errors.h"
-#include "vsag/binaryset.h"
 #include "base_filter_functor.h"
 #include "common.h"
 #include "safe_allocator.h"
-#include "index_common_param.h"
-#include "vsag/dataset.h"
 #include "typing.h"
 #include "stream_reader.h"
 #include "stream_writer.h"

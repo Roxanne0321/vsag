@@ -19,35 +19,30 @@
 #include "index_common_param.h"
 
 namespace vsag {
-struct SparseIVFParameters{
+struct SparseIPIVFParameters{
 public:
-    static SparseIVFParameters
-    FromJson(JsonType& sparse_ivf_param_obj, IndexCommonParam index_common_param);
+    static SparseIPIVFParameters
+    FromJson(JsonType& sparse_ipivf_param_obj, IndexCommonParam index_common_param);
 
 public:
     DocPruneStrategy doc_prune_strategy;
-    BuildStrategy build_strategy;
     VectorPruneStrategy vector_prune_strategy;
-    std::string ivf_size_file{""};
-    std::string index_file{""};
 
 protected:
-    SparseIVFParameters() = default;
+    SparseIPIVFParameters() = default;
 };
 
-struct SparseIVFSearchParameters{
+struct SparseIPIVFSearchParameters{
 public:
-    static SparseIVFSearchParameters
+    static SparseIPIVFSearchParameters
     FromJson(const std::string& json_string);
 
 public:
     // required vars
    int num_threads{1};
-   float heap_factor{0.0};
-   size_t query_cut{0};
 
 protected:
-    SparseIVFSearchParameters() = default;
+    SparseIPIVFSearchParameters() = default;
 };
 
 }  // namespace vsag

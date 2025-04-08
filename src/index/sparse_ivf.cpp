@@ -54,24 +54,63 @@ SparseComputeIP(const SparseVector& sv1, const SparseVector& sv2) {
     return -sum;
 }
 
-float
-SparseComputeIPBruteForce(const SparseVector& sv1, const SparseVector& sv2) {
-    float sum = 0.0f;
-
-    for (size_t i = 0; i < sv1.dim_; ++i) {
-        for (size_t j = 0; j < sv2.dim_; ++j) {
-            if (sv1.ids_[i] == sv2.ids_[j]) {
-                sum += sv1.vals_[i] * sv2.vals_[j];
-            }
-        }
+std::vector<uint32_t>
+SparseIVF::get_top_n_indices(const SparseVector& vec, uint32_t n) {
+    // 创建索引数组来追踪排序
+    std::vector<uint32_t> indices(vec.dim_);
+    for (uint32_t i = 0; i < vec.dim_; ++i) {
+        indices[i] = i;
     }
-    return -sum;
+    if (n >= vec.dim_) {
+        return indices;
+    }
+
+    // 使用std::nth_element 找到第n个最大的值的位置
+    std::nth_element(
+        indices.begin(), indices.begin() + n, indices.end(), [&](uint32_t a, uint32_t b) {
+            return vec.vals_[a] > vec.vals_[b];  // 降序比较
+        });
+
+    return indices;
 }
 
 SparseIVF::SparseIVF(const SparseIVFParameters& param, const IndexCommonParam& index_common_param) {
-    prune_strategy_ = param.prune_strategy;
+    doc_prune_strategy_ = param.doc_prune_strategy;
     build_strategy_ = param.build_strategy;
+    vector_prune_strategy_ = param.vector_prune_strategy;
+    ivf_size_file_ = param.ivf_size_file;
+    index_file_ = param.index_file;
     allocator_ = index_common_param.allocator_;
+}
+
+uint64_t
+SparseIVF::cal_and_save_ivf_size() {
+    std::ofstream out(ivf_size_file_, std::ios::binary);
+    out.write(reinterpret_cast<const char*>(&(this->data_dim_)), sizeof(uint32_t));
+    uint64_t size = 0;
+    if (this->inverted_lists_) {
+        for (int i = 0; i < this->data_dim_; ++i) {
+            size += this->inverted_lists_[i].doc_num_;
+            out.write(reinterpret_cast<const char*>(&(this->inverted_lists_[i].doc_num_)),
+                      sizeof(uint32_t));
+        }
+    }
+    return size;
+}
+
+void 
+SparseIVF::save_inverted_index() {
+    std::ofstream out(index_file_, std::ios::binary);
+    out.write(reinterpret_cast<const char*>(&(this->unique_dim_)), sizeof(uint32_t));
+    if (this->inverted_lists_) {
+        for (uint32_t i = 0; i < this->data_dim_; ++i) {
+            if(this->inverted_lists_[i].doc_num_ != 0) {
+                out.write(reinterpret_cast<const char*>(&(i)),sizeof(uint32_t));
+                out.write(reinterpret_cast<const char*>(&(this->inverted_lists_[i].doc_num_)),sizeof(uint32_t));
+                out.write(reinterpret_cast<const char*>(this->inverted_lists_[i].ids_), this->inverted_lists_[i].doc_num_ * sizeof(uint32_t));
+            }
+        }
+    }
 }
 
 std::vector<int64_t>
@@ -105,27 +144,52 @@ SparseIVF::build(const DatasetPtr& base) {
     //// build and prune word_map
     std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>> word_map;
 
-    for (size_t i = 0; i < this->total_count_; ++i) {
-        const SparseVector& sv = data_[i];
-        for (uint32_t j = 0; j < sv.dim_; ++j) {
-            uint32_t word_id = sv.ids_[j];
-            word_map[word_id].emplace_back(i, sv.vals_[j]);
+    if (vector_prune_strategy_.type == VectorPruneStrategyType::VectorPrune) {
+        int n_cut = vector_prune_strategy_.vectorPrune.n_cut;
+        for (size_t i = 0; i < this->total_count_; ++i) {
+            const SparseVector& sv = data_[i];
+            std::vector<uint32_t> top_n_indices = get_top_n_indices(sv, n_cut);
+            for (auto j = 0; j < std::min(n_cut, static_cast<int>(sv.dim_)); j++) {
+                uint32_t word_id = sv.ids_[top_n_indices[j]];
+                float val = sv.vals_[top_n_indices[j]];
+                word_map[word_id].emplace_back(i, val);
+            }
+        }
+    } else if (vector_prune_strategy_.type == VectorPruneStrategyType::NotPrune) {
+        for (size_t i = 0; i < this->total_count_; ++i) {
+            const SparseVector& sv = data_[i];
+            for (uint32_t j = 0; j < sv.dim_; ++j) {
+                uint32_t word_id = sv.ids_[j];
+                word_map[word_id].emplace_back(i, sv.vals_[j]);
+            }
         }
     }
 
-    if (prune_strategy_.type == DocPruneStrategyType::FixedSize) {
-        fixed_pruning(word_map, prune_strategy_.parameters.fixedSize.n_postings);
-    } else if (prune_strategy_.type == DocPruneStrategyType::GlobalPrune) {
-        global_pruning(word_map, prune_strategy_.parameters.globalPrune.n_postings);
+    if (doc_prune_strategy_.type == DocPruneStrategyType::FixedSize) {
+        fixed_pruning(word_map, doc_prune_strategy_.parameters.fixedSize.n_postings);
+    } else if (doc_prune_strategy_.type == DocPruneStrategyType::GlobalPrune) {
+        global_pruning(word_map, doc_prune_strategy_.parameters.globalPrune.n_postings);
         fixed_pruning(word_map,
-                      prune_strategy_.parameters.globalPrune.n_postings *
-                          prune_strategy_.parameters.globalPrune.fraction);
+                      doc_prune_strategy_.parameters.globalPrune.n_postings *
+                          doc_prune_strategy_.parameters.globalPrune.fraction);
     }
+
+    unique_dim_ = word_map.size();
 
     if (build_strategy_.type == BuildStrategyType::NotKmeans) {
         this->build_inverted_lists(word_map);
     } else if (build_strategy_.type == BuildStrategyType::Kmeans) {
         this->build_posting_lists(word_map);
+    }
+
+    if (this->ivf_size_file_ != "") {
+        auto size = this->cal_and_save_ivf_size();
+        std::cout << "inverted lists size: " << size << std::endl;
+    }
+
+    if (this->index_file_ != "") {
+        save_inverted_index();
+        std::cout << "save done!" << std::endl;
     }
 
     return {};
@@ -136,9 +200,15 @@ SparseIVF::build_inverted_lists(
     const std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map) {
     //// fill in inverted_list
     this->inverted_lists_ = new InvertedList[this->data_dim_];
+
+    int num_threads = omp_get_max_threads();
+    omp_set_num_threads(num_threads);
+
+#pragma omp parallel for
     for (uint32_t i = 0; i < this->data_dim_; ++i) {
         auto it = word_map.find(i);
         if (it != word_map.end()) {
+            std::lock_guard<std::mutex> lock(ivf_mutex[i]);
             const auto& doc_infos = it->second;
             uint32_t doc_num = static_cast<uint32_t>(doc_infos.size());
             this->inverted_lists_[i].doc_num_ = doc_num;
@@ -148,16 +218,18 @@ SparseIVF::build_inverted_lists(
             }
         }
     }
-    //     for (uint32_t i = 0; i < this->data_dim_; ++i) {
-/*     int i = 32;
-        std::cout << "inverted list " << i << " has " << this->inverted_lists_[i].doc_num_ << " docs" << std::endl;
+/*     for (uint32_t i = 0; i < 2000; ++i) {
         if (this->inverted_lists_[i].doc_num_ != 0) {
-            for(auto j = 0; j < this->inverted_lists_[i].doc_num_ ; j++) {
-                std::cout << this->inverted_lists_[i].ids_[j] << " ";
+            std::cout << "inverted list " << i << " has " << this->inverted_lists_[i].doc_num_
+                      << " docs" << std::endl;
+            if (this->inverted_lists_[i].doc_num_ != 0) {
+                for (auto j = 0; j < this->inverted_lists_[i].doc_num_; j++) {
+                    std::cout << this->inverted_lists_[i].ids_[j] << " ";
+                }
+                std::cout << std::endl;
             }
-            std::cout << std::endl;
-        } */
-    //} 
+        }
+    } */
 }
 
 void
@@ -177,7 +249,7 @@ SparseIVF::build_posting_lists(
             /* int thread_id = omp_get_thread_num();
             int total_threads = omp_get_num_threads();
             printf("build list %d on thread %d of %d\n", i, thread_id, total_threads);  */
-             /* if (i % 1000 == 0) {
+            /* if (i % 1000 == 0) {
                 std::cout << i << std::endl;
             }  */
             const auto& doc_infos = it->second;
@@ -244,25 +316,7 @@ SparseIVF::build_posting_list(const std::vector<uint32_t>& posting_ids, uint32_t
         }
         std::vector<uint32_t> ids;
         std::vector<float> vals;
-        /*          if (dim < 10) {
-            std::cout << "cluster " << i << std::endl;
-
-            for (auto id : clusters[i]) {
-                std::cout << id << " ";
-            }
-            std::cout << std::endl;
-        }  */
         energy_preserving_summary(ids, vals, clusters[i], fraction);
-        /*  std::cout << "energy ids: " << std::endl;
-        for(auto id : ids) {
-            std::cout << id << " ";
-        }
-        std::cout << std::endl;
-        std::cout << "energy vals: " << std::endl;
-        for(auto val : vals) {
-            std::cout << val << " ";
-        }
-        std::cout << std::endl; */
         summary.emplace_back(ids, vals);
     }
 
@@ -395,8 +449,10 @@ void
 SparseIVF::fixed_pruning(
     std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map,
     int n_postings) {
+    //int unique_term_ids = 0;
     for (uint32_t i = 0; i < this->data_dim_; ++i) {
         if (word_map.find(i) != word_map.end()) {
+            //unique_term_ids ++;
             auto& doc_infos = word_map[i];
 
             std::sort(doc_infos.begin(),
@@ -412,6 +468,7 @@ SparseIVF::fixed_pruning(
             word_map[i] = doc_infos;
         }
     }
+    //std::cout << "unique term id: " << unique_term_ids << std::endl;
 }
 
 void
@@ -477,35 +534,26 @@ SparseIVF::knn_search(const DatasetPtr& query,
     auto* dists = (float*)allocator_->Allocate(sizeof(float) * query_num * k);
     dataset_results->Distances(dists);
 
-    //uint32_t dist_cmp = 0;
+    uint32_t dist_cmp = 0;
 
     // int num_threads = omp_get_max_threads();
     omp_set_num_threads(num_threads_);
-    //std::cout << "Number of threads: " << omp_get_max_threads() << std::endl;
 
     if (this->build_strategy_.type == BuildStrategyType::NotKmeans) {
-        #pragma omp parallel for
+#pragma omp parallel for
         for (int i = 0; i < query_num; ++i) {
-            /* int thread_id = omp_get_thread_num();
-        int total_threads = omp_get_num_threads();
-        printf("Processing query %d on thread %d of %d\n", i, thread_id, total_threads);  */
             uint32_t temp_cmp;
             auto query_vector = query->GetSparseVectors()[i];
             this->search_one_query(query_vector, k, ids + i * k, dists + i * k, temp_cmp);
-             /* #pragma omp critical
+            /* #pragma omp critical
             {
                 dist_cmp += temp_cmp;
-            }  */
+            } */
         }
     } else {
-        #pragma omp parallel for
+#pragma omp parallel for
         for (int i = 0; i < query_num; ++i) {
-            /* int thread_id = omp_get_thread_num();
-        int total_threads = omp_get_num_threads();
-        printf("Processing query %d on thread %d of %d\n", i, thread_id, total_threads);  */
-            /* if(i % 1000 == 0) {
-                std::cout << "query " << i << std::endl;
-            } */
+            std::cout << "query " << i << std::endl;
             uint32_t temp_cmp;
             auto query_vector = query->GetSparseVectors()[i];
             this->search_one_query_with_kmeans(
@@ -513,7 +561,7 @@ SparseIVF::knn_search(const DatasetPtr& query,
             /* #pragma omp critical
             {
                 dist_cmp += temp_cmp;
-            }  */
+            } */
         }
     }
 
@@ -566,7 +614,7 @@ SparseIVF::search_one_query(const SparseVector& query_vector,
             }
             visited_doc_ids.insert(doc_id);
 
-            SparseVector sv = this->data_[doc_id];
+            SparseVector sv = this->data_[doc_id];  //shallow copy
             float dist = SparseComputeIP(sv, query_vector);
             dist_cmp++;
 
@@ -627,7 +675,6 @@ SparseIVF::search_one_query_with_kmeans(const SparseVector& query_vector,
         if (this->posting_lists_[term_id].doc_num_ == 0) {
             continue;
         }
-
         auto dots = this->posting_lists_[term_id].summaries.matmul_with_query(
             query_vector.ids_, query_vector.vals_, query_vector.dim_);
 
@@ -659,11 +706,6 @@ SparseIVF::search_one_query_with_kmeans(const SparseVector& query_vector,
                 cur_heap_top = heap.top().first;
             }
         }
-        /* std::cout << "term id: " << term_id << " has " << visited_doc_ids.size() << " visited doc ids : " << std::endl;
-        for (const auto& id : visited_doc_ids) {
-            std::cout << id << " ";
-        }
-        std::cout << std::endl; */
     }
 
     for (auto j = static_cast<int64_t>(heap.size() - 1); j >= 0; --j) {
@@ -677,31 +719,31 @@ void
 SparseIVF::print_posting_lists() {
     //for (size_t i = 0; i < 10; ++i) {
     int i = 32;
-        std::cout << "PostingList " << i << ":" << std::endl;
-        std::cout << "  doc_num_: " << posting_lists_[i].doc_num_ << std::endl;
+    std::cout << "PostingList " << i << ":" << std::endl;
+    std::cout << "  doc_num_: " << posting_lists_[i].doc_num_ << std::endl;
 
-        if (posting_lists_[i].postings) {
-            std::cout << "  postings: ";
-            for (size_t j = 0; j < posting_lists_[i].doc_num_;
-                 ++j) {  // 假设 postings 有 doc_num_ 个元素
-                std::cout << posting_lists_[i].postings[j] << " ";
-            }
-            std::cout << std::endl;
-        } else {
-            std::cout << "  postings: nullptr" << std::endl;
+    if (posting_lists_[i].postings) {
+        std::cout << "  postings: ";
+        for (size_t j = 0; j < posting_lists_[i].doc_num_;
+             ++j) {  // 假设 postings 有 doc_num_ 个元素
+            std::cout << posting_lists_[i].postings[j] << " ";
         }
+        std::cout << std::endl;
+    } else {
+        std::cout << "  postings: nullptr" << std::endl;
+    }
 
-        if (posting_lists_[i].block_offsets) {
-            std::cout << "  block_offsets: ";
-            for (size_t j = 0; j <= posting_lists_[i].num_clusters_;
-                 ++j) {  // 假设 block_offsets 有 doc_num_ 个元素
-                std::cout << posting_lists_[i].block_offsets[j] << " ";
-            }
-            std::cout << std::endl;
-        } else {
-            std::cout << "  block_offsets: nullptr" << std::endl;
+    if (posting_lists_[i].block_offsets) {
+        std::cout << "  block_offsets: ";
+        for (size_t j = 0; j <= posting_lists_[i].num_clusters_;
+             ++j) {  // 假设 block_offsets 有 doc_num_ 个元素
+            std::cout << posting_lists_[i].block_offsets[j] << " ";
         }
-   //}
+        std::cout << std::endl;
+    } else {
+        std::cout << "  block_offsets: nullptr" << std::endl;
+    }
+    //}
 }
 
 }  // namespace vsag

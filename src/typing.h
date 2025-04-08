@@ -60,4 +60,55 @@ using MaxHeap = std::priority_queue<std::pair<float, InnerIdType>,
                                     Vector<std::pair<float, InnerIdType>>,
                                     CompareByFirst>;
 
+enum class VectorPruneStrategyType {
+    NotPrune,
+    VectorPrune
+};
+struct VectorPrune {
+    int n_cut;
+};
+
+struct VectorPruneStrategy {
+    VectorPruneStrategyType type;
+    VectorPrune vectorPrune;
+};
+
+enum class DocPruneStrategyType {
+    NotPrune,
+    FixedSize,
+    GlobalPrune
+};
+
+struct FixedSize {
+    int n_postings;
+};
+
+struct GlobalPrune {
+    int n_postings;
+    float fraction;
+};
+
+struct DocPruneStrategy {
+    DocPruneStrategyType type;
+    union {
+        FixedSize fixedSize;
+        GlobalPrune globalPrune;
+    } parameters;
+};
+
+enum class BuildStrategyType {
+    NotKmeans,
+    Kmeans
+};
+
+struct Kmeans {
+    int min_cluster_size;
+    float centroid_fraction;
+    float summary_energy;
+};
+
+struct BuildStrategy {
+    BuildStrategyType type;
+    Kmeans kmeans;
+};
 }  // namespace vsag

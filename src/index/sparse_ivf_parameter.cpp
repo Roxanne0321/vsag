@@ -21,6 +21,30 @@ namespace vsag {
 SparseIVFParameters
 SparseIVFParameters::FromJson(JsonType& sparse_ivf_param_obj, IndexCommonParam index_common_param) {
     SparseIVFParameters obj;
+
+    if (!sparse_ivf_param_obj.contains(VECTOR_PRUNE_STRATEGY)) {
+        throw std::invalid_argument(
+            fmt::format("parameters must contains {}", VECTOR_PRUNE_STRATEGY));
+    }
+
+     if (!sparse_ivf_param_obj[VECTOR_PRUNE_STRATEGY].contains(PRUNE_TYPE)) {
+        throw std::invalid_argument(
+            fmt::format("parameters must contains {}", PRUNE_TYPE));
+    }
+
+    std::string vector_prune_type_str = sparse_ivf_param_obj[VECTOR_PRUNE_STRATEGY][PRUNE_TYPE];
+    VectorPruneStrategy vector_prune_strat;
+
+    if (vector_prune_type_str == "NotPrune") {
+        vector_prune_strat.type = VectorPruneStrategyType::NotPrune;
+    }
+    else if (vector_prune_type_str == "VectorPrune") {
+        vector_prune_strat.type = VectorPruneStrategyType::VectorPrune;
+        vector_prune_strat.vectorPrune.n_cut = sparse_ivf_param_obj[VECTOR_PRUNE_STRATEGY][NCUT];
+    }
+
+    obj.vector_prune_strategy = vector_prune_strat;
+
     if (!sparse_ivf_param_obj.contains(DOC_PRUNE_STRATEGY)) {
         throw std::invalid_argument(
             fmt::format("parameters must contains {}", DOC_PRUNE_STRATEGY));
@@ -49,7 +73,7 @@ SparseIVFParameters::FromJson(JsonType& sparse_ivf_param_obj, IndexCommonParam i
     else {
         throw std::invalid_argument("Unknown strategy type");
     }
-    obj.prune_strategy = prune_strat;
+    obj.doc_prune_strategy = prune_strat;
 
     if (!sparse_ivf_param_obj.contains(BUILD_STRATEGY)) {
         throw std::invalid_argument(
@@ -75,6 +99,13 @@ SparseIVFParameters::FromJson(JsonType& sparse_ivf_param_obj, IndexCommonParam i
     }
     
     obj.build_strategy = build_strat;
+
+    if(sparse_ivf_param_obj.contains("ivf_size_file")){
+        obj.ivf_size_file = sparse_ivf_param_obj["ivf_size_file"];
+    }
+    if(sparse_ivf_param_obj.contains("index_file")){
+        obj.index_file = sparse_ivf_param_obj["index_file"];
+    }
     return obj;
 }
 

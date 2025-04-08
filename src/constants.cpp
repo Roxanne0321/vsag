@@ -26,6 +26,7 @@ const char* const INDEX_PYRAMID = "pyramid";
 const char* const INDEX_BRUTE_FORCE = "brute_force";
 const char* const INDEX_SPARSE_IVF = "sparse_ivf";
 const char* const INDEX_SPARSE_BRUTE_FORCE = "sparse_brute_force";
+const char* const INDEX_SPARSE_IPIVF = "sparse_ipivf";
 
 const char* const DIM = "dim";
 const char* const NUM_ELEMENTS = "num_elements";
@@ -132,6 +133,8 @@ const char* const DOC_PRUNE_STRATEGY = "doc_prune_strategy";
 const char* const PRUNE_TYPE = "prune_type";
 const char* const POSTING_LISTS = "num_postings";
 const char* const MAX_FRACTION = "max_fraction";
+const char* const VECTOR_PRUNE_STRATEGY = "vector_prune_strategy";
+const char* const NCUT = "n_cut";
 const char* const BUILD_STRATEGY = "build_strategy";
 const char* const BUILD_TYPE = "build_type";
 const char* const MIN_CLUSTER_SIZE = "min_cluster_size";
