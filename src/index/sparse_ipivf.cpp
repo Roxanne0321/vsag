@@ -191,45 +191,30 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
                               int64_t k,
                               int64_t* res_ids,
                               float* res_dists) const {
-    std::vector<std::vector<std::pair<uint32_t, float>>> dists(query_vector.dim_);
-    for( auto i = 0; i < query_vector.dim_; ++i) {
-        multiply_fp(dists[i], query_vector.vals_[i], query_vector.ids_[i]);    
-    }
-    merge_and_find_topk(dists, res_ids, res_dists, k);
-}
+    std::vector<float> dists(this->total_count_, 0.0);
     
-void 
-SparseIPIVF::multiply_fp(std::vector<std::pair<uint32_t, float>> &dists,
-                         float query_value,
-                         uint32_t dim) const {
-    auto &list = word_map[dim];
-    auto doc_num = list.size();
-    dists.resize(doc_num);
-    for(uint32_t i = 0; i < doc_num; ++i) {
-        dists[i] = std::make_pair(list[i].first, - query_value * list[i].second);
-    }
-}
+    for (uint32_t i = 0; i < query_vector.dim_; ++i) {
+        uint32_t term_id = query_vector.ids_[i];
+        auto term_doc_num = this->inverted_lists_[term_id].doc_num_;
 
-void
-SparseIPIVF::merge_and_find_topk(std::vector<std::vector<std::pair<uint32_t, float>>> total_dists,
-                                 int64_t* res_ids,
-                                 float* res_dists,
-                                 int64_t k) const {
-    std::unordered_map<uint32_t, float> score_map;
+        if (term_doc_num == 0) {
+            continue;
+        }
 
-    for (const auto& list : total_dists) {
-        for (const auto& pair : list) {
-            uint32_t id = pair.first;
-            float score = pair.second;
-            score_map[id] += score;
+        for (uint32_t j = 0; j < term_doc_num; ++j) {
+            auto doc_id = this->inverted_lists_[term_id].ids_[j];
+            auto value = this->inverted_lists_[term_id].vals_[j];
+            dists[doc_id] += (-query_vector.vals_[i] * value);
         }
     }
 
     MaxHeap heap(this->allocator_.get());
     float cur_heap_top = std::numeric_limits<float>::max();
-    for(const auto& entry : score_map) {
-        if (heap.size() < k || entry.second < cur_heap_top) {
-            heap.emplace(entry.second, entry.first);
+
+    for (size_t i = 0; i < this->total_count_; ++i) {
+
+        if (heap.size() < k || dists[i] < cur_heap_top) {
+            heap.emplace(dists[i], i);
         }
 
         if (heap.size() > k) {
