@@ -61,6 +61,7 @@ SparseIPIVF::build(const DatasetPtr& base) {
     this->data_dim_ += 1;
 
     ivf_mutex = std::vector<std::mutex>(this->data_dim_);
+    std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>> word_map;
 
     if (vector_prune_strategy_.type == VectorPruneStrategyType::VectorPrune) {
         int n_cut = vector_prune_strategy_.vectorPrune.n_cut;
@@ -85,18 +86,42 @@ SparseIPIVF::build(const DatasetPtr& base) {
     }
 
     if (doc_prune_strategy_.type == DocPruneStrategyType::FixedSize) {
-        fixed_pruning(doc_prune_strategy_.parameters.fixedSize.n_postings);
+        fixed_pruning(word_map, doc_prune_strategy_.parameters.fixedSize.n_postings);
     } else if (doc_prune_strategy_.type == DocPruneStrategyType::GlobalPrune) {
-        global_pruning(doc_prune_strategy_.parameters.globalPrune.n_postings);
-        fixed_pruning(doc_prune_strategy_.parameters.globalPrune.n_postings *
+        global_pruning(word_map, doc_prune_strategy_.parameters.globalPrune.n_postings);
+        fixed_pruning(word_map,
+                      doc_prune_strategy_.parameters.globalPrune.n_postings *
                           doc_prune_strategy_.parameters.globalPrune.fraction);
+    }
+
+    this->inverted_lists_ = new InvertedList[this->data_dim_];
+    int num_threads = omp_get_max_threads();
+    omp_set_num_threads(num_threads);
+
+#pragma omp parallel for
+    for (uint32_t i = 0; i < this->data_dim_; ++i) {
+        auto it = word_map.find(i);
+        if (it != word_map.end()) {
+            std::lock_guard<std::mutex> lock(ivf_mutex[i]);
+            const auto& doc_infos = it->second;
+            uint32_t doc_num = static_cast<uint32_t>(doc_infos.size());
+            this->inverted_lists_[i].doc_num_ = doc_num;
+            this->inverted_lists_[i].ids_ = new uint32_t[doc_num];
+            this->inverted_lists_[i].vals_ = new float[doc_num];
+            for (uint32_t j = 0; j < doc_num; j++) {
+                this->inverted_lists_[i].ids_[j] = doc_infos[j].first;
+                this->inverted_lists_[i].vals_[j] = doc_infos[j].second;
+            }
+        }
     }
 
     return {};
 }
 
 void
-SparseIPIVF::fixed_pruning(int n_postings) {
+SparseIPIVF::fixed_pruning(
+    std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map,
+    int n_postings) {
     //int unique_term_ids = 0;
     for (uint32_t i = 0; i < this->data_dim_; ++i) {
         if (word_map.find(i) != word_map.end()) {
@@ -119,7 +144,9 @@ SparseIPIVF::fixed_pruning(int n_postings) {
 }
 
 void
-SparseIPIVF::global_pruning(int n_postings) {
+SparseIPIVF::global_pruning(
+    std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map,
+    int n_postings) {
     // Calculate total postings to select
     size_t total_postings = this->data_dim_ * n_postings;  //seismic中是整个倒排列表的长度
 
@@ -192,7 +219,7 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
                               int64_t* res_ids,
                               float* res_dists) const {
     std::vector<float> dists(this->total_count_, 0.0);
-    
+
     for (uint32_t i = 0; i < query_vector.dim_; ++i) {
         uint32_t term_id = query_vector.ids_[i];
         auto term_doc_num = this->inverted_lists_[term_id].doc_num_;
@@ -212,7 +239,6 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
     float cur_heap_top = std::numeric_limits<float>::max();
 
     for (size_t i = 0; i < this->total_count_; ++i) {
-
         if (heap.size() < k || dists[i] < cur_heap_top) {
             heap.emplace(dists[i], i);
         }
@@ -230,6 +256,6 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
         res_dists[j] = heap.top().first;
         res_ids[j] = heap.top().second;
         heap.pop();
-    }  
+    }
 }
 }  // namespace vsag

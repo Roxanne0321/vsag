@@ -34,6 +34,16 @@ class SparseIPIVF : public Index {
 public:
     SparseIPIVF(const SparseIPIVFParameters& param, const IndexCommonParam& index_common_param);
     ~SparseIPIVF() {
+     if (this->inverted_lists_) {
+        for (int i = 0; i < this->data_dim_; ++i) {
+            if (this->inverted_lists_[i].doc_num_ != 0) {
+                delete[] this->inverted_lists_[i].ids_;
+                delete[] this->inverted_lists_[i].vals_;
+                }
+            }
+        delete[] this->inverted_lists_;
+     }
+
     for(auto &lock : ivf_mutex) {
         std::lock_guard<std::mutex> lg(lock);
     }
@@ -144,10 +154,10 @@ private:
     get_top_n_indices(const SparseVector& vec, uint32_t n);
 
     void
-    fixed_pruning(int n_postings);
+    fixed_pruning(std::unordered_map <uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map, int n_postings);
 
     void
-    global_pruning(int n_postings);
+    global_pruning(std::unordered_map <uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map, int n_postings);
 
     DatasetPtr
     knn_search(const DatasetPtr& query,
@@ -161,27 +171,22 @@ private:
                      int64_t* res_ids,
                      float* res_dists) const;
 
-    void 
-    multiply_fp(std::vector<std::pair<uint32_t, float>> &dists,
-                         float query_value,
-                         uint32_t dim) const;
-
-    void
-    merge_and_find_topk(std::vector<std::vector<std::pair<uint32_t, float>>> total_dists,
-                                 int64_t* res_ids,
-                                 float* res_dists,
-                                 int64_t k) const;
-
     uint64_t
     cal_serialize_size() const {
         return 0;
     }
 
 private:
+    struct InvertedList {
+        uint32_t doc_num_{0};
+        uint32_t* ids_{nullptr};
+        float* vals_{nullptr};
+    };
+
     uint32_t data_dim_{0};
     uint32_t total_count_{0};
     std::shared_ptr<Allocator> allocator_{nullptr};
-    mutable std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>> word_map;
+    InvertedList* inverted_lists_{nullptr};
 
 //parameters
     mutable int num_threads_;
