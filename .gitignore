@@ -193,3 +193,5 @@ data/
 #experiments results
 /results/
 /experiments/
+/perf.data.old
+/perf.data
