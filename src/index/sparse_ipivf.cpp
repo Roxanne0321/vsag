@@ -89,9 +89,9 @@ SparseIPIVF::build(const DatasetPtr& base) {
         fixed_pruning(word_map, doc_prune_strategy_.parameters.fixedSize.n_postings);
     } else if (doc_prune_strategy_.type == DocPruneStrategyType::GlobalPrune) {
         global_pruning(word_map, doc_prune_strategy_.parameters.globalPrune.n_postings);
-        fixed_pruning(word_map,
-                      doc_prune_strategy_.parameters.globalPrune.n_postings *
-                          doc_prune_strategy_.parameters.globalPrune.fraction);
+        // fixed_pruning(word_map,
+        //               doc_prune_strategy_.parameters.globalPrune.n_postings *
+        //                   doc_prune_strategy_.parameters.globalPrune.fraction);
     }
 
     this->inverted_lists_ = new InvertedList[this->data_dim_];
@@ -149,6 +149,7 @@ SparseIPIVF::global_pruning(
     int n_postings) {
     // Calculate total postings to select
     size_t total_postings = this->data_dim_ * n_postings;  //seismic中是整个倒排列表的长度
+    //std::cout << "total_postings: " << total_postings <<std::endl;
 
     // Collect all postings in a single vector with additional information
     std::vector<std::tuple<float, uint32_t, uint32_t>> postings;  // (score, docid, word_id)
@@ -204,12 +205,20 @@ SparseIPIVF::knn_search(const DatasetPtr& query,
 
     omp_set_num_threads(num_threads_);
 
+    //uint32_t fp_cmp = 0;
+
 #pragma omp parallel for
     for (int i = 0; i < query_num; ++i) {
         auto query_vector = query->GetSparseVectors()[i];
-        this->search_one_query(query_vector, k, ids + i * k, dists + i * k);
+        uint32_t temp_cmp;
+        this->search_one_query(query_vector, k, ids + i * k, dists + i * k, temp_cmp);
+        // #pragma omp critical
+        //     {
+        //         fp_cmp += temp_cmp;
+        //     }
     }
 
+    //std::cout << "fp cmp: " << fp_cmp <<std::endl;
     return std::move(dataset_results);
 }
 
@@ -217,7 +226,10 @@ void
 SparseIPIVF::search_one_query(const SparseVector& query_vector,
                               int64_t k,
                               int64_t* res_ids,
-                              float* res_dists) const {
+                              float* res_dists,
+                              uint32_t &fp_cmp) const {
+
+    fp_cmp = 0;
     std::vector<float> dists(this->total_count_, 0.0);
 
     for (uint32_t i = 0; i < query_vector.dim_; ++i) {
@@ -232,6 +244,7 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
             auto doc_id = this->inverted_lists_[term_id].ids_[j];
             auto value = this->inverted_lists_[term_id].vals_[j];
             dists[doc_id] += (-query_vector.vals_[i] * value);
+            fp_cmp ++;
         }
     }
 

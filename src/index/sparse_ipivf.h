@@ -169,7 +169,8 @@ private:
     search_one_query(const SparseVector& query_vector,
                      int64_t k,
                      int64_t* res_ids,
-                     float* res_dists) const;
+                     float* res_dists,
+                     uint32_t &fp_cmp) const;
 
     uint64_t
     cal_serialize_size() const {
