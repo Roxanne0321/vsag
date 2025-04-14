@@ -172,6 +172,11 @@ private:
                      float* res_dists,
                      uint32_t &fp_cmp) const;
 
+    uint32_t
+    multiply(const SparseVector& query_vector, std::vector<float> &dists) const;
+
+    void scan_sort(std::vector<float> &dists, int64_t k, int64_t* res_ids, float* res_dists) const;
+
     uint64_t
     cal_serialize_size() const {
         return 0;

@@ -228,10 +228,14 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
                               int64_t* res_ids,
                               float* res_dists,
                               uint32_t &fp_cmp) const {
+    std::vector<float> dists(this->total_count_, 0.0);   
+    fp_cmp = multiply(query_vector, dists);
+    scan_sort(dists, k, res_ids, res_dists);
+}
 
-    fp_cmp = 0;
-    std::vector<float> dists(this->total_count_, 0.0);
-
+uint32_t
+SparseIPIVF::multiply(const SparseVector& query_vector, std::vector<float> &dists) const {
+    uint32_t fp_cmp = 0;
     for (uint32_t i = 0; i < query_vector.dim_; ++i) {
         uint32_t term_id = query_vector.ids_[i];
         auto term_doc_num = this->inverted_lists_[term_id].doc_num_;
@@ -248,6 +252,11 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
         }
     }
 
+    return fp_cmp;
+}
+
+void 
+SparseIPIVF::scan_sort(std::vector<float> &dists, int64_t k, int64_t* res_ids, float* res_dists) const {
     MaxHeap heap(this->allocator_.get());
     float cur_heap_top = std::numeric_limits<float>::max();
 
