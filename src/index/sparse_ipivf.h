@@ -169,13 +169,19 @@ private:
     search_one_query(const SparseVector& query_vector,
                      int64_t k,
                      int64_t* res_ids,
-                     float* res_dists,
-                     uint32_t &fp_cmp) const;
+                     float* res_dists) const;
 
-    uint32_t
-    multiply(const SparseVector& query_vector, std::vector<float> &dists) const;
+    void 
+    multiply(const SparseVector& query_vector, std::vector<std::vector<float>>& product) const;
 
-    void scan_sort(std::vector<float> &dists, int64_t k, int64_t* res_ids, float* res_dists) const;
+    void
+    accumulation(const SparseVector& query_vector, std::vector<float> &dists, std::vector<std::vector<float>> &product) const;
+
+    void 
+    scan_sort(std::vector<float>& dists,
+                       int64_t k,
+                       int64_t* res_ids,
+                       float* res_dists) const;
 
     uint64_t
     cal_serialize_size() const {

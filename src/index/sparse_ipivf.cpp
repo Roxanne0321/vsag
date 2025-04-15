@@ -15,6 +15,7 @@
 #include "sparse_ipivf.h"
 
 #include <random>
+#include <immintrin.h>
 
 namespace vsag {
 SparseIPIVF::SparseIPIVF(const SparseIPIVFParameters& param,
@@ -210,8 +211,8 @@ SparseIPIVF::knn_search(const DatasetPtr& query,
 #pragma omp parallel for
     for (int i = 0; i < query_num; ++i) {
         auto query_vector = query->GetSparseVectors()[i];
-        uint32_t temp_cmp;
-        this->search_one_query(query_vector, k, ids + i * k, dists + i * k, temp_cmp);
+        //uint32_t temp_cmp;
+        this->search_one_query(query_vector, k, ids + i * k, dists + i * k);
         // #pragma omp critical
         //     {
         //         fp_cmp += temp_cmp;
@@ -226,16 +227,29 @@ void
 SparseIPIVF::search_one_query(const SparseVector& query_vector,
                               int64_t k,
                               int64_t* res_ids,
-                              float* res_dists,
-                              uint32_t &fp_cmp) const {
-    std::vector<float> dists(this->total_count_, 0.0);   
-    fp_cmp = multiply(query_vector, dists);
+                              float* res_dists) const {
+
+    std::vector<std::vector<float>> product(query_vector.dim_);
+    std::vector<float> dists(this->total_count_, 0.0);
+
+    multiply(query_vector, product);   
+    accumulation(query_vector, dists, product);
     scan_sort(dists, k, res_ids, res_dists);
 }
 
-uint32_t
-SparseIPIVF::multiply(const SparseVector& query_vector, std::vector<float> &dists) const {
-    uint32_t fp_cmp = 0;
+void
+SparseIPIVF::accumulation(const SparseVector& query_vector, std::vector<float> &dists, std::vector<std::vector<float>> &product) const {
+    for(uint32_t i = 0; i < query_vector.dim_; ++i) {
+        auto doc_num = this->inverted_lists_[i].doc_num_;
+        for(int j = 0; j < doc_num; ++j) {
+            auto doc_id = this->inverted_lists_[i].ids_[j];
+            dists[doc_id] += product[i][j];
+        }
+    }
+}
+
+void 
+SparseIPIVF::multiply(const SparseVector& query_vector, std::vector<std::vector<float>>& product) const {
     for (uint32_t i = 0; i < query_vector.dim_; ++i) {
         uint32_t term_id = query_vector.ids_[i];
         auto term_doc_num = this->inverted_lists_[term_id].doc_num_;
@@ -244,23 +258,44 @@ SparseIPIVF::multiply(const SparseVector& query_vector, std::vector<float> &dist
             continue;
         }
 
-        for (uint32_t j = 0; j < term_doc_num; ++j) {
-            auto doc_id = this->inverted_lists_[term_id].ids_[j];
+        product[i].resize(term_doc_num);
+
+        float q_val = -query_vector.vals_[i];
+        uint32_t j = 0;
+
+        // 处理多个值， AVX-512 最多可处理 16 个 float
+        for (; j + 15 < term_doc_num; j += 16) {
+            // 加载 16 个 vals 到 SIMD 寄存器
+            __m512 vals = _mm512_loadu_ps(&this->inverted_lists_[term_id].vals_[j]);
+            // 将 q_val 扩展到向量寄存器
+            __m512 q_vals = _mm512_set1_ps(q_val);
+            // 执行乘法
+            __m512 result = _mm512_mul_ps(q_vals, vals);
+            // 存储结果到 product[i]
+            _mm512_storeu_ps(&product[i][j], result);
+        }
+
+        // 处理剩余元素（不足16个的部分）
+        for (; j < term_doc_num; ++j) {
             auto value = this->inverted_lists_[term_id].vals_[j];
-            dists[doc_id] += (-query_vector.vals_[i] * value);
-            fp_cmp ++;
+            product[i][j] = q_val * value;
         }
     }
-
-    return fp_cmp;
 }
 
-void 
-SparseIPIVF::scan_sort(std::vector<float> &dists, int64_t k, int64_t* res_ids, float* res_dists) const {
+
+void
+SparseIPIVF::scan_sort(std::vector<float>& dists,
+                       int64_t k,
+                       int64_t* res_ids,
+                       float* res_dists) const {
     MaxHeap heap(this->allocator_.get());
     float cur_heap_top = std::numeric_limits<float>::max();
 
     for (size_t i = 0; i < this->total_count_; ++i) {
+        if(dists[i] == 0) {
+            continue;
+        }
         if (heap.size() < k || dists[i] < cur_heap_top) {
             heap.emplace(dists[i], i);
         }
