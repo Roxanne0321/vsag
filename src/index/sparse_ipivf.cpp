@@ -248,8 +248,9 @@ SparseIPIVF::accumulation(const SparseVector& query_vector, std::vector<float> &
     }
 }
 
-void 
+void
 SparseIPIVF::multiply(const SparseVector& query_vector, std::vector<std::vector<float>>& product) const {
+
     for (uint32_t i = 0; i < query_vector.dim_; ++i) {
         uint32_t term_id = query_vector.ids_[i];
         auto term_doc_num = this->inverted_lists_[term_id].doc_num_;
@@ -260,27 +261,13 @@ SparseIPIVF::multiply(const SparseVector& query_vector, std::vector<std::vector<
 
         product[i].resize(term_doc_num);
 
-        float q_val = -query_vector.vals_[i];
-        uint32_t j = 0;
-
-        // 处理多个值， AVX-512 最多可处理 16 个 float
-        for (; j + 15 < term_doc_num; j += 16) {
-            // 加载 16 个 vals 到 SIMD 寄存器
-            __m512 vals = _mm512_loadu_ps(&this->inverted_lists_[term_id].vals_[j]);
-            // 将 q_val 扩展到向量寄存器
-            __m512 q_vals = _mm512_set1_ps(q_val);
-            // 执行乘法
-            __m512 result = _mm512_mul_ps(q_vals, vals);
-            // 存储结果到 product[i]
-            _mm512_storeu_ps(&product[i][j], result);
-        }
-
-        // 处理剩余元素（不足16个的部分）
-        for (; j < term_doc_num; ++j) {
+        for (uint32_t j = 0; j < term_doc_num; ++j) {
+            auto doc_id = this->inverted_lists_[term_id].ids_[j];
             auto value = this->inverted_lists_[term_id].vals_[j];
-            product[i][j] = q_val * value;
+            product[i][j] = -query_vector.vals_[i] * value;
         }
     }
+
 }
 
 
