@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace vsag {
 
@@ -25,6 +26,8 @@ float
 FP32ComputeIP(const float* query, const float* codes, uint64_t dim);
 float
 FP32ComputeL2Sqr(const float* query, const float* codes, uint64_t dim);
+void
+FP32ComputeSIP(const float* q_vals, const float* codes, float* product_data, uint64_t dim);
 }  // namespace generic
 
 namespace sse {
@@ -53,10 +56,15 @@ float
 FP32ComputeIP(const float* query, const float* codes, uint64_t dim);
 float
 FP32ComputeL2Sqr(const float* query, const float* codes, uint64_t dim);
+void
+FP32ComputeSIP(const float* q_vals, const float* codes, float* product_data, uint64_t dim);
 }  // namespace avx512
 
 using FP32ComputeType = float (*)(const float* query, const float* codes, uint64_t dim);
 extern FP32ComputeType FP32ComputeIP;
 extern FP32ComputeType FP32ComputeL2Sqr;
+
+using FP32SparseComputeType = void (*)(const float* query, const float* codes, float* product_data, uint64_t dim);
+extern FP32SparseComputeType FP32ComputeSIP;
 
 }  // namespace vsag

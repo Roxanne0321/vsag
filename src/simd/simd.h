@@ -17,6 +17,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <vector>
 
 #include "basic_func.h"
 #include "fp32_simd.h"

@@ -95,6 +95,13 @@ FP32ComputeL2Sqr(const float* query, const float* codes, uint64_t dim) {
     return result;
 }
 
+void
+FP32ComputeSIP(const float* q_vals, const float* codes, float* product_data, uint64_t dim) {
+    for (uint64_t i = 0; i < dim; ++i) {
+        product_data[i] = q_vals[0] * codes[i];
+    }
+}
+
 float
 SQ8ComputeIP(const float* query,
              const uint8_t* codes,

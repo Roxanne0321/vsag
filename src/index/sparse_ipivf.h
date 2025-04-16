@@ -23,6 +23,8 @@
 #include "stream_writer.h"
 #include "typing.h"
 #include "vsag/index.h"
+#include "simd/simd.h"
+#include "simd/fp32_simd.h"
 #include <iostream>
 #include <omp.h>
 #include <algorithm>

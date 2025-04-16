@@ -14,8 +14,8 @@
 
 #include "sparse_ipivf.h"
 
+
 #include <random>
-#include <immintrin.h>
 
 namespace vsag {
 SparseIPIVF::SparseIPIVF(const SparseIPIVFParameters& param,
@@ -248,9 +248,8 @@ SparseIPIVF::accumulation(const SparseVector& query_vector, std::vector<float> &
     }
 }
 
-void
+void 
 SparseIPIVF::multiply(const SparseVector& query_vector, std::vector<std::vector<float>>& product) const {
-
     for (uint32_t i = 0; i < query_vector.dim_; ++i) {
         uint32_t term_id = query_vector.ids_[i];
         auto term_doc_num = this->inverted_lists_[term_id].doc_num_;
@@ -261,13 +260,11 @@ SparseIPIVF::multiply(const SparseVector& query_vector, std::vector<std::vector<
 
         product[i].resize(term_doc_num);
 
-        for (uint32_t j = 0; j < term_doc_num; ++j) {
-            auto doc_id = this->inverted_lists_[term_id].ids_[j];
-            auto value = this->inverted_lists_[term_id].vals_[j];
-            product[i][j] = -query_vector.vals_[i] * value;
-        }
-    }
+        float q_val = -query_vector.vals_[i];
 
+        FP32ComputeSIP(&q_val, this->inverted_lists_[term_id].vals_, product[i].data(), term_doc_num);
+
+    }
 }
 
 

@@ -108,6 +108,26 @@ FP32ComputeIP(const float* query, const float* codes, uint64_t dim) {
 #endif
 }
 
+void
+FP32ComputeSIP(const float* q_vals, const float* codes, float* product_data, uint64_t dim) {
+#if defined(ENABLE_AVX512)
+    const uint64_t n = dim / 16;
+    __m512 q_vec, code_vec, result_vec;
+
+    for (uint64_t i = 0; i < n; ++i) {
+        q_vec = _mm512_set1_ps(q_vals[0]);     // 从内存加载 16 个 query 浮点数
+        code_vec = _mm512_loadu_ps(codes + i * 16);   // 从内存加载 16 个 codes 浮点数
+        result_vec = _mm512_mul_ps(q_vec, code_vec);  // 执行乘法运算
+        _mm512_storeu_ps(product_data + i * 16, result_vec); // 存储结果到 product 数组
+    }
+
+    // 处理剩余不足 16 个的部分
+    for (uint64_t i = n * 16; i < dim; ++i) {
+        product_data[i] = q_vals[0] * codes[i];
+    }
+#endif
+}
+
 float
 FP32ComputeL2Sqr(const float* query, const float* codes, uint64_t dim) {
 #if defined(ENABLE_AVX512)

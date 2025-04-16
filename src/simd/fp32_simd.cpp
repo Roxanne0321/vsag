@@ -64,4 +64,15 @@ GetFP32ComputeL2Sqr() {
     return generic::FP32ComputeL2Sqr;
 }
 FP32ComputeType FP32ComputeL2Sqr = GetFP32ComputeL2Sqr();
+
+static FP32SparseComputeType
+GetFP32ComputeSIP() {
+    if (SimdStatus::SupportAVX512()) {
+#if defined(ENABLE_AVX512)
+        return avx512::FP32ComputeSIP;
+#endif
+    }
+    return generic::FP32ComputeSIP;
+}
+FP32SparseComputeType FP32ComputeSIP = GetFP32ComputeSIP();
 }  // namespace vsag
