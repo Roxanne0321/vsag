@@ -235,14 +235,16 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
     multiply(query_vector, product);   
     accumulation(query_vector, dists, product);
     scan_sort(dists, k, res_ids, res_dists);
+
 }
 
 void
 SparseIPIVF::accumulation(const SparseVector& query_vector, std::vector<float> &dists, std::vector<std::vector<float>> &product) const {
     for(uint32_t i = 0; i < query_vector.dim_; ++i) {
-        auto doc_num = this->inverted_lists_[i].doc_num_;
+        uint32_t term_id = query_vector.ids_[i];
+        auto doc_num = this->inverted_lists_[term_id].doc_num_;
         for(int j = 0; j < doc_num; ++j) {
-            auto doc_id = this->inverted_lists_[i].ids_[j];
+            auto doc_id = this->inverted_lists_[term_id].ids_[j];
             dists[doc_id] += product[i][j];
         }
     }
@@ -257,13 +259,11 @@ SparseIPIVF::multiply(const SparseVector& query_vector, std::vector<std::vector<
         if (term_doc_num == 0) {
             continue;
         }
-
         product[i].resize(term_doc_num);
 
         float q_val = -query_vector.vals_[i];
 
         FP32ComputeSIP(&q_val, this->inverted_lists_[term_id].vals_, product[i].data(), term_doc_num);
-
     }
 }
 

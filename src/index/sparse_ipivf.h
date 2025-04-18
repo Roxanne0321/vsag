@@ -177,7 +177,7 @@ private:
     multiply(const SparseVector& query_vector, std::vector<std::vector<float>>& product) const;
 
     void
-    accumulation(const SparseVector& query_vector, std::vector<float> &dists, std::vector<std::vector<float>> &product) const;
+    accumulation(const SparseVector& query_vector, std::vector<float> &dists, std::vector<std::vector<float>>& product) const;
 
     void 
     scan_sort(std::vector<float>& dists,
