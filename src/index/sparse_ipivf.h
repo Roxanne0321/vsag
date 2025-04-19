@@ -173,18 +173,6 @@ private:
                      int64_t* res_ids,
                      float* res_dists) const;
 
-    void 
-    multiply(std::vector<std::pair<uint32_t, float>> &query_pair, std::vector<std::vector<float>>& product) const;
-
-    void
-    accumulation(std::vector<std::pair<uint32_t, float>> &query_pair, std::unordered_map<uint32_t, float>& dists, std::vector<std::vector<float>>& product) const;
-
-    void 
-    scan_sort(std::unordered_map<uint32_t, float>& dists,
-                       int64_t k,
-                       int64_t* res_ids,
-                       float* res_dists) const;
-
     uint64_t
     cal_serialize_size() const {
         return 0;

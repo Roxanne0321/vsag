@@ -89,9 +89,9 @@ SparseIPIVF::build(const DatasetPtr& base) {
         fixed_pruning(word_map, doc_prune_strategy_.parameters.fixedSize.n_postings);
     } else if (doc_prune_strategy_.type == DocPruneStrategyType::GlobalPrune) {
         global_pruning(word_map, doc_prune_strategy_.parameters.globalPrune.n_postings);
-         fixed_pruning(word_map,
+        fixed_pruning(word_map,
                       doc_prune_strategy_.parameters.globalPrune.n_postings *
-                           doc_prune_strategy_.parameters.globalPrune.fraction);
+                          doc_prune_strategy_.parameters.globalPrune.fraction);
     }
 
     this->inverted_lists_ = new InvertedList[this->data_dim_];
@@ -149,7 +149,6 @@ SparseIPIVF::global_pruning(
     int n_postings) {
     // Calculate total postings to select
     size_t total_postings = this->data_dim_ * n_postings;  //seismic中是整个倒排列表的长度
-    //std::cout << "total_postings: " << total_postings <<std::endl;
 
     // Collect all postings in a single vector with additional information
     std::vector<std::tuple<float, uint32_t, uint32_t>> postings;  // (score, docid, word_id)
@@ -206,20 +205,12 @@ SparseIPIVF::knn_search(const DatasetPtr& query,
 
     omp_set_num_threads(num_threads_);
 
-    //uint32_t fp_cmp = 0;
-
 #pragma omp parallel for
     for (int i = 0; i < query_num; ++i) {
         auto query_vector = query->GetSparseVectors()[i];
-        //uint32_t temp_cmp;
         this->search_one_query(query_vector, k, ids + i * k, dists + i * k);
-        // #pragma omp critical
-        //     {
-        //         fp_cmp += temp_cmp;
-        //     }
     }
 
-    //std::cout << "fp cmp: " << fp_cmp <<std::endl;
     return std::move(dataset_results);
 }
 
@@ -246,34 +237,9 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
             query_pair.resize(this->query_cut_);
         }
     }
+                                
+    std::vector<float> dists(this->total_count_, 0.0);
 
-    std::vector<std::vector<float>> product(query_pair.size());
-    //std::vector<float> dists(this->total_count_, 0.0);
-    std::unordered_map<uint32_t, float> dists;
-
-    multiply(query_pair, product);
-    accumulation(query_pair, dists, product);
-    //std::cout << "dists size: " << dists.size() <<std::endl;
-    scan_sort(dists, k, res_ids, res_dists);
-}
-
-void
-SparseIPIVF::accumulation(std::vector<std::pair<uint32_t, float>> &query_pair,
-                          std::unordered_map<uint32_t, float>& dists,
-                          std::vector<std::vector<float>>& product) const {
-    for (uint32_t i = 0; i < query_pair.size(); ++i) {
-        uint32_t term_id = query_pair[i].first;
-        auto doc_num = this->inverted_lists_[term_id].doc_num_;
-        for (int j = 0; j < doc_num; ++j) {
-            auto doc_id = this->inverted_lists_[term_id].ids_[j];
-            dists[doc_id] += product[i][j];
-        }
-    }
-}
-
-void
-SparseIPIVF::multiply(std::vector<std::pair<uint32_t, float>> &query_pair,
-                      std::vector<std::vector<float>>& product) const {
     for (uint32_t i = 0; i < query_pair.size(); ++i) {
         uint32_t term_id = query_pair[i].first;
         auto term_doc_num = this->inverted_lists_[term_id].doc_num_;
@@ -281,26 +247,20 @@ SparseIPIVF::multiply(std::vector<std::pair<uint32_t, float>> &query_pair,
         if (term_doc_num == 0) {
             continue;
         }
-        product[i].resize(term_doc_num);
 
-        float q_val = -query_pair[i].second;
-
-        FP32ComputeSIP(
-            &q_val, this->inverted_lists_[term_id].vals_, product[i].data(), term_doc_num);
+        for (uint32_t j = 0; j < term_doc_num; ++j) {
+            auto doc_id = this->inverted_lists_[term_id].ids_[j];
+            auto value = this->inverted_lists_[term_id].vals_[j];
+            dists[doc_id] += (-query_pair[i].second * value);
+        }
     }
-}
 
-void
-SparseIPIVF::scan_sort(std::unordered_map<uint32_t, float>& dists,
-                       int64_t k,
-                       int64_t* res_ids,
-                       float* res_dists) const {
     MaxHeap heap(this->allocator_.get());
     float cur_heap_top = std::numeric_limits<float>::max();
 
-    for (const auto& pair : dists) {
-        if (heap.size() < k || pair.second < cur_heap_top) {
-            heap.emplace(pair.second, pair.first);
+    for (size_t i = 0; i < this->total_count_; ++i) {
+        if (heap.size() < k || dists[i] < cur_heap_top) {
+            heap.emplace(dists[i], i);
         }
 
         if (heap.size() > k) {
