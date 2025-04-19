@@ -40,6 +40,7 @@ public:
 public:
     // required vars
    int num_threads{1};
+   size_t query_cut{0};
 
 protected:
     SparseIPIVFSearchParameters() = default;

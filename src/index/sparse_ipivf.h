@@ -174,13 +174,13 @@ private:
                      float* res_dists) const;
 
     void 
-    multiply(const SparseVector& query_vector, std::vector<std::vector<float>>& product) const;
+    multiply(std::vector<std::pair<uint32_t, float>> &query_pair, std::vector<std::vector<float>>& product) const;
 
     void
-    accumulation(const SparseVector& query_vector, std::vector<float> &dists, std::vector<std::vector<float>>& product) const;
+    accumulation(std::vector<std::pair<uint32_t, float>> &query_pair, std::unordered_map<uint32_t, float>& dists, std::vector<std::vector<float>>& product) const;
 
     void 
-    scan_sort(std::vector<float>& dists,
+    scan_sort(std::unordered_map<uint32_t, float>& dists,
                        int64_t k,
                        int64_t* res_ids,
                        float* res_dists) const;
@@ -203,6 +203,7 @@ private:
     InvertedList* inverted_lists_{nullptr};
 
 //parameters
+    mutable size_t query_cut_;
     mutable int num_threads_;
     DocPruneStrategy doc_prune_strategy_;
     VectorPruneStrategy vector_prune_strategy_;

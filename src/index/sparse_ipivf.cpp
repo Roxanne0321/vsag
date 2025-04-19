@@ -14,7 +14,6 @@
 
 #include "sparse_ipivf.h"
 
-
 #include <random>
 
 namespace vsag {
@@ -90,9 +89,9 @@ SparseIPIVF::build(const DatasetPtr& base) {
         fixed_pruning(word_map, doc_prune_strategy_.parameters.fixedSize.n_postings);
     } else if (doc_prune_strategy_.type == DocPruneStrategyType::GlobalPrune) {
         global_pruning(word_map, doc_prune_strategy_.parameters.globalPrune.n_postings);
-        // fixed_pruning(word_map,
-        //               doc_prune_strategy_.parameters.globalPrune.n_postings *
-        //                   doc_prune_strategy_.parameters.globalPrune.fraction);
+         fixed_pruning(word_map,
+                      doc_prune_strategy_.parameters.globalPrune.n_postings *
+                           doc_prune_strategy_.parameters.globalPrune.fraction);
     }
 
     this->inverted_lists_ = new InvertedList[this->data_dim_];
@@ -195,6 +194,7 @@ SparseIPIVF::knn_search(const DatasetPtr& query,
                         const std::function<bool(int64_t)>& filter) const {
     auto params = SparseIPIVFSearchParameters::FromJson(parameters);
     this->num_threads_ = params.num_threads;
+    this->query_cut_ = params.query_cut;
 
     uint32_t query_num = query->GetNumElements();
     auto dataset_results = Dataset::Make();
@@ -228,32 +228,54 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
                               int64_t k,
                               int64_t* res_ids,
                               float* res_dists) const {
+    std::vector<std::pair<uint32_t, float>> query_pair(query_vector.dim_);
+    for (uint32_t i = 0; i < query_vector.dim_; ++i) {
+        query_pair[i] = std::make_pair(query_vector.ids_[i], query_vector.vals_[i]);
+    }
 
-    std::vector<std::vector<float>> product(query_vector.dim_);
-    std::vector<float> dists(this->total_count_, 0.0);
+    if (query_cut_ > 0) {
+        if (query_vector.dim_ > query_cut_) {
+            std::nth_element(
+                query_pair.begin(),
+                query_pair.begin() + query_cut_,
+                query_pair.end(),
+                [](const std::pair<uint32_t, float>& a, const std::pair<uint32_t, float>& b) {
+                    return a.second > b.second;
+                });
 
-    multiply(query_vector, product);   
-    accumulation(query_vector, dists, product);
+            query_pair.resize(this->query_cut_);
+        }
+    }
+
+    std::vector<std::vector<float>> product(query_pair.size());
+    //std::vector<float> dists(this->total_count_, 0.0);
+    std::unordered_map<uint32_t, float> dists;
+
+    multiply(query_pair, product);
+    accumulation(query_pair, dists, product);
+    //std::cout << "dists size: " << dists.size() <<std::endl;
     scan_sort(dists, k, res_ids, res_dists);
-
 }
 
 void
-SparseIPIVF::accumulation(const SparseVector& query_vector, std::vector<float> &dists, std::vector<std::vector<float>> &product) const {
-    for(uint32_t i = 0; i < query_vector.dim_; ++i) {
-        uint32_t term_id = query_vector.ids_[i];
+SparseIPIVF::accumulation(std::vector<std::pair<uint32_t, float>> &query_pair,
+                          std::unordered_map<uint32_t, float>& dists,
+                          std::vector<std::vector<float>>& product) const {
+    for (uint32_t i = 0; i < query_pair.size(); ++i) {
+        uint32_t term_id = query_pair[i].first;
         auto doc_num = this->inverted_lists_[term_id].doc_num_;
-        for(int j = 0; j < doc_num; ++j) {
+        for (int j = 0; j < doc_num; ++j) {
             auto doc_id = this->inverted_lists_[term_id].ids_[j];
             dists[doc_id] += product[i][j];
         }
     }
 }
 
-void 
-SparseIPIVF::multiply(const SparseVector& query_vector, std::vector<std::vector<float>>& product) const {
-    for (uint32_t i = 0; i < query_vector.dim_; ++i) {
-        uint32_t term_id = query_vector.ids_[i];
+void
+SparseIPIVF::multiply(std::vector<std::pair<uint32_t, float>> &query_pair,
+                      std::vector<std::vector<float>>& product) const {
+    for (uint32_t i = 0; i < query_pair.size(); ++i) {
+        uint32_t term_id = query_pair[i].first;
         auto term_doc_num = this->inverted_lists_[term_id].doc_num_;
 
         if (term_doc_num == 0) {
@@ -261,27 +283,24 @@ SparseIPIVF::multiply(const SparseVector& query_vector, std::vector<std::vector<
         }
         product[i].resize(term_doc_num);
 
-        float q_val = -query_vector.vals_[i];
+        float q_val = -query_pair[i].second;
 
-        FP32ComputeSIP(&q_val, this->inverted_lists_[term_id].vals_, product[i].data(), term_doc_num);
+        FP32ComputeSIP(
+            &q_val, this->inverted_lists_[term_id].vals_, product[i].data(), term_doc_num);
     }
 }
 
-
 void
-SparseIPIVF::scan_sort(std::vector<float>& dists,
+SparseIPIVF::scan_sort(std::unordered_map<uint32_t, float>& dists,
                        int64_t k,
                        int64_t* res_ids,
                        float* res_dists) const {
     MaxHeap heap(this->allocator_.get());
     float cur_heap_top = std::numeric_limits<float>::max();
 
-    for (size_t i = 0; i < this->total_count_; ++i) {
-        if(dists[i] == 0) {
-            continue;
-        }
-        if (heap.size() < k || dists[i] < cur_heap_top) {
-            heap.emplace(dists[i], i);
+    for (const auto& pair : dists) {
+        if (heap.size() < k || pair.second < cur_heap_top) {
+            heap.emplace(pair.second, pair.first);
         }
 
         if (heap.size() > k) {
