@@ -86,12 +86,13 @@ SparseIPIVF::build(const DatasetPtr& base) {
     }
 
     if (doc_prune_strategy_.type == DocPruneStrategyType::FixedSize) {
-        fixed_pruning(word_map, doc_prune_strategy_.parameters.fixedSize.n_postings);
+        n_postings = doc_prune_strategy_.parameters.fixedSize.n_postings;
+        fixed_pruning(word_map, n_postings);
     } else if (doc_prune_strategy_.type == DocPruneStrategyType::GlobalPrune) {
-        global_pruning(word_map, doc_prune_strategy_.parameters.globalPrune.n_postings);
-        fixed_pruning(word_map,
-                      doc_prune_strategy_.parameters.globalPrune.n_postings *
-                          doc_prune_strategy_.parameters.globalPrune.fraction);
+        n_postings = doc_prune_strategy_.parameters.fixedSize.n_postings;
+        max_fraction = doc_prune_strategy_.parameters.globalPrune.fraction;
+        global_pruning(word_map, n_postings);
+        fixed_pruning(word_map, n_postings * max_fraction);
     }
 
     this->inverted_lists_ = new InvertedList[this->data_dim_];
@@ -214,6 +215,58 @@ SparseIPIVF::knn_search(const DatasetPtr& query,
     return std::move(dataset_results);
 }
 
+void 
+SparseIPIVF::multiply(std::vector<std::pair<uint32_t, float>> &query_pair, std::vector<float> &dists) const {
+    for (uint32_t i = 0; i < query_pair.size(); ++i) {
+        uint32_t term_id = query_pair[i].first;
+        auto term_doc_num = this->inverted_lists_[term_id].doc_num_;
+
+        if (term_doc_num == 0) {
+            continue;
+        }
+
+
+        for (uint32_t j = 0; j < term_doc_num; ++j) {
+            auto doc_id = this->inverted_lists_[term_id].ids_[j];
+            auto value = this->inverted_lists_[term_id].vals_[j];
+            dists[doc_id] += (-query_pair[i].second * value);
+        }
+    }
+}
+
+void 
+SparseIPIVF::scan_sort(std::vector<float> &dists, 
+                int64_t k,
+                int64_t* res_ids,
+                float* res_dists) const {
+
+     MaxHeap heap(this->allocator_.get());
+    float cur_heap_top = std::numeric_limits<float>::max();
+
+    for (size_t i = 0; i < this->total_count_; ++i) {
+        if(dists[i] == 0) {
+            continue;
+        }
+        if (heap.size() < k || dists[i] < cur_heap_top) {
+            heap.emplace(dists[i], i);
+        }
+
+        if (heap.size() > k) {
+            heap.pop();
+        }
+
+        if (!heap.empty()) {
+            cur_heap_top = heap.top().first;
+        }
+    }
+
+    for (auto j = static_cast<int64_t>(heap.size() - 1); j >= 0; --j) {
+        res_dists[j] = heap.top().first;
+        res_ids[j] = heap.top().second;
+        heap.pop();
+    }
+}
+
 void
 SparseIPIVF::search_one_query(const SparseVector& query_vector,
                               int64_t k,
@@ -240,42 +293,7 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
                                 
     std::vector<float> dists(this->total_count_, 0.0);
 
-    for (uint32_t i = 0; i < query_pair.size(); ++i) {
-        uint32_t term_id = query_pair[i].first;
-        auto term_doc_num = this->inverted_lists_[term_id].doc_num_;
-
-        if (term_doc_num == 0) {
-            continue;
-        }
-
-        for (uint32_t j = 0; j < term_doc_num; ++j) {
-            auto doc_id = this->inverted_lists_[term_id].ids_[j];
-            auto value = this->inverted_lists_[term_id].vals_[j];
-            dists[doc_id] += (-query_pair[i].second * value);
-        }
-    }
-
-    MaxHeap heap(this->allocator_.get());
-    float cur_heap_top = std::numeric_limits<float>::max();
-
-    for (size_t i = 0; i < this->total_count_; ++i) {
-        if (heap.size() < k || dists[i] < cur_heap_top) {
-            heap.emplace(dists[i], i);
-        }
-
-        if (heap.size() > k) {
-            heap.pop();
-        }
-
-        if (!heap.empty()) {
-            cur_heap_top = heap.top().first;
-        }
-    }
-
-    for (auto j = static_cast<int64_t>(heap.size() - 1); j >= 0; --j) {
-        res_dists[j] = heap.top().first;
-        res_ids[j] = heap.top().second;
-        heap.pop();
-    }
+    multiply(query_pair, dists);
+    scan_sort(dists, k, res_ids, res_dists);
 }
 }  // namespace vsag

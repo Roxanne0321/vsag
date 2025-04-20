@@ -173,6 +173,15 @@ private:
                      int64_t* res_ids,
                      float* res_dists) const;
 
+    void    
+    multiply(std::vector<std::pair<uint32_t, float>> &query_pair, std::vector<float> &dists) const;
+
+    void 
+    scan_sort(std::vector<float> &dists, 
+                int64_t k,
+                int64_t* res_ids,
+                float* res_dists) const;
+
     uint64_t
     cal_serialize_size() const {
         return 0;
@@ -195,6 +204,8 @@ private:
     mutable int num_threads_;
     DocPruneStrategy doc_prune_strategy_;
     VectorPruneStrategy vector_prune_strategy_;
+    int n_postings;
+    float max_fraction;
 //mutex
     std::vector<std::mutex> ivf_mutex;
 };
