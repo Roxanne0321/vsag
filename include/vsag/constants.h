@@ -25,6 +25,7 @@ extern const char* const INDEX_BRUTE_FORCE;
 extern const char* const INDEX_SPARSE_IVF;
 extern const char* const INDEX_SPARSE_BRUTE_FORCE;
 extern const char* const INDEX_SPARSE_IPIVF;
+extern const char* const INDEX_SPARSE_KMEANS;
 extern const char* const DIM;
 extern const char* const NUM_ELEMENTS;
 extern const char* const IDS;
@@ -138,5 +139,7 @@ extern const char* const MIN_CLUSTER_SIZE;
 extern const char* const CENTROID_FRACTION;
 extern const char* const SUMMARY_ENERGY;
 extern const char* const HEAP_FACTOR;
+extern const char* const INDEX_CLUSTER_DIM_SIZE;
+extern const char* const INDEX_SEARCH_NUM;
 
 }  // namespace vsag
