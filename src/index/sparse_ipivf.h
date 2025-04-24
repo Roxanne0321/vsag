@@ -14,43 +14,45 @@
 
 #pragma once
 
+#include <omp.h>
+
+#include <algorithm>
+#include <fstream>
+#include <iostream>
+#include <mutex>
+
 #include "../utils.h"
 #include "base_filter_functor.h"
 #include "common.h"
 #include "safe_allocator.h"
+#include "simd/fp32_simd.h"
+#include "simd/simd.h"
 #include "sparse_ipivf_parameter.h"
 #include "stream_reader.h"
 #include "stream_writer.h"
 #include "typing.h"
 #include "vsag/index.h"
-#include "simd/simd.h"
-#include "simd/fp32_simd.h"
-#include <iostream>
-#include <omp.h>
-#include <algorithm>
-#include <mutex>
-#include <fstream>
 
 namespace vsag {
 class SparseIPIVF : public Index {
 public:
     SparseIPIVF(const SparseIPIVFParameters& param, const IndexCommonParam& index_common_param);
     ~SparseIPIVF() {
-     if (this->inverted_lists_) {
-        for (int i = 0; i < this->data_dim_; ++i) {
-            if (this->inverted_lists_[i].doc_num_ != 0) {
-                delete[] this->inverted_lists_[i].ids_;
-                delete[] this->inverted_lists_[i].vals_;
+        if (this->inverted_lists_) {
+            for (int i = 0; i < this->data_dim_; ++i) {
+                if (this->inverted_lists_[i].doc_num_ != 0) {
+                    delete[] this->inverted_lists_[i].ids_;
+                    delete[] this->inverted_lists_[i].vals_;
                 }
             }
-        delete[] this->inverted_lists_;
-     }
+            delete[] this->inverted_lists_;
+        }
 
-    for(auto &lock : ivf_mutex) {
-        std::lock_guard<std::mutex> lg(lock);
+        for (auto& lock : ivf_mutex) {
+            std::lock_guard<std::mutex> lg(lock);
+        }
+        allocator_.reset();
     }
-    allocator_.reset();
-}
 
 public:
     tl::expected<std::vector<int64_t>, Error>
@@ -156,10 +158,12 @@ private:
     get_top_n_indices(const SparseVector& vec, uint32_t n);
 
     void
-    fixed_pruning(std::unordered_map <uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map, int n_postings);
+    fixed_pruning(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map,
+                  int n_postings);
 
     void
-    global_pruning(std::unordered_map <uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map, int n_postings);
+    global_pruning(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map,
+                   int n_postings);
 
     DatasetPtr
     knn_search(const DatasetPtr& query,
@@ -173,14 +177,17 @@ private:
                      int64_t* res_ids,
                      float* res_dists) const;
 
-    void    
-    multiply(std::vector<std::pair<uint32_t, float>> &query_pair, std::vector<float> &dists) const;
+    void
+    multiply(std::vector<std::pair<uint32_t, float>> &query_pair,
+             std::vector<std::vector<float>>& product) const;
 
-    void 
-    scan_sort(std::vector<float> &dists, 
-                int64_t k,
-                int64_t* res_ids,
-                float* res_dists) const;
+    void
+    accumulation_scan(std::vector<std::pair<uint32_t, float>> &query_pair,
+                 std::vector<float>& dists,
+                 std::vector<std::vector<float>>& product,
+                 int64_t k,
+                 int64_t* res_ids,
+                 float* res_dists) const;
 
     uint64_t
     cal_serialize_size() const {
@@ -199,14 +206,12 @@ private:
     std::shared_ptr<Allocator> allocator_{nullptr};
     InvertedList* inverted_lists_{nullptr};
 
-//parameters
+    //parameters
     mutable size_t query_cut_;
     mutable int num_threads_;
     DocPruneStrategy doc_prune_strategy_;
     VectorPruneStrategy vector_prune_strategy_;
-    int n_postings;
-    float max_fraction;
-//mutex
+    //mutex
     std::vector<std::mutex> ivf_mutex;
 };
 }  // namespace vsag
