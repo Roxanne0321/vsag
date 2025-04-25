@@ -95,6 +95,10 @@ SparseIPIVFSearchParameters::FromJson(const std::string& json_string) {
     if (params[INDEX_SPARSE_IPIVF].contains(QUERY_CUT)) {
         obj.query_cut = params[INDEX_SPARSE_IPIVF][QUERY_CUT];
     }
+    if (params[INDEX_SPARSE_IPIVF].contains(WINDOW_SIZE)) {
+        obj.window_size = params[INDEX_SPARSE_IPIVF][WINDOW_SIZE];
+    }
+
     return obj;
 }
 }  // namespace vsag

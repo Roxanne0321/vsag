@@ -242,6 +242,7 @@ SparseIPIVF::knn_search(const DatasetPtr& query,
     auto params = SparseIPIVFSearchParameters::FromJson(parameters);
     this->num_threads_ = params.num_threads;
     this->query_cut_ = params.query_cut;
+    this->window_size_ = params.window_size;
 
     uint32_t query_num = query->GetNumElements();
     auto dataset_results = Dataset::Make();
@@ -252,6 +253,7 @@ SparseIPIVF::knn_search(const DatasetPtr& query,
     dataset_results->Distances(dists);
 
     omp_set_num_threads(num_threads_);
+    std::vector<float> win_dists(window_size_, 0.0);
 
     //uint32_t fp_cmp = 0;
 
@@ -259,7 +261,7 @@ SparseIPIVF::knn_search(const DatasetPtr& query,
     for (int i = 0; i < query_num; ++i) {
         auto query_vector = query->GetSparseVectors()[i];
         //uint32_t temp_cmp;
-        this->search_one_query(query_vector, k, ids + i * k, dists + i * k);
+        this->search_one_query(query_vector, k, ids + i * k, dists + i * k, win_dists);
         // #pragma omp critical
         //     {
         //         fp_cmp += temp_cmp;
@@ -274,7 +276,8 @@ void
 SparseIPIVF::search_one_query(const SparseVector& query_vector,
                               int64_t k,
                               int64_t* res_ids,
-                              float* res_dists) const {
+                              float* res_dists,
+                              std::vector<float>& win_dists) const {
     std::vector<std::pair<uint32_t, float>> query_pair;
     for (uint32_t i = 0; i < query_vector.dim_; ++i) {
         query_pair.emplace_back(query_vector.ids_[i], query_vector.vals_[i]);
@@ -292,9 +295,8 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
         }
     }
     std::vector<std::vector<float>> product(query_pair.size());
-    std::vector<float> dists(this->total_count_, 0.0);
     multiply(query_pair, product);
-    accumulation_scan(query_pair, dists, product, k, res_ids, res_dists);
+    accumulation_scan(query_pair, win_dists, product, k, res_ids, res_dists);
 }
 
 void
@@ -307,82 +309,71 @@ SparseIPIVF::accumulation_scan(std::vector<std::pair<uint32_t, float>>& query_pa
     MaxHeap heap(this->allocator_.get());
     float cur_heap_top = std::numeric_limits<float>::max();
 
-    uint32_t last_min = UINT32_MAX;
-    uint32_t cur_min = UINT32_MAX;
-    //uint32_t cur_max = 0;
-    uint32_t max_term_doc_num = 0;
+    uint32_t start = UINT32_MAX;
+    uint32_t next_start = UINT32_MAX;
+    uint32_t max_doc_id = 0;
+    size_t query_term_num = query_pair.size();
+    std::vector<uint32_t> list_index(query_term_num, 0);
 
-    for (auto i = 0; i < query_pair.size(); ++i) {
+    for (auto i = 0; i < query_term_num; ++i) {
         auto term_id = query_pair[i].first;
         auto term_doc_num = this->inverted_lists_[term_id].doc_num_;
         if (term_doc_num == 0) {
             continue;
         }
 
-        if (term_doc_num > max_term_doc_num) {
-            max_term_doc_num = term_doc_num;
+        auto min_ = this->inverted_lists_[term_id].ids_[0];
+        if (min_ < start) {
+            start = min_;
         }
 
-        auto cur_id = this->inverted_lists_[term_id].ids_[0];
-        if (cur_id < last_min) {
-            last_min = cur_id;
+        auto max_ = this->inverted_lists_[term_id].ids_[term_doc_num - 1];
+        if (max_ > max_doc_id) {
+            max_doc_id = max_;
         }
     }
 
-    // for(auto i = 0; i < 10; i++) {
-    //     auto term_id = query_pair[i].first;
-    //     auto term_doc_num = this->inverted_lists_[term_id].doc_num_;
-    //     std::cout << term_id << std::endl;
-    //     for(auto j = term_doc_num - 1; j >= term_doc_num - 10; j) {
-    //         std::cout << this->inverted_lists_[term_id].ids_[j] << " ";
-    //     }
-    //     std::cout << std::endl;
-    // }
+    while (start < max_doc_id) {
+        for (auto term_index = 0; term_index < query_term_num; term_index++) {
+            uint32_t doc_id_index = list_index[term_index];
 
-    //std::vector<uint32_t> diff_min_max(max_term_doc_num);
-
-    for (auto i = 0; i < max_term_doc_num; ++i) {
-        for (auto term_index = 0; term_index < query_pair.size(); ++term_index) {
+            if (doc_id_index == -1) {
+                continue;  //标志着这一列扫完了
+            }
             auto term_id = query_pair[term_index].first;
-            if (i < product[term_index].size()) {
-                auto doc_id = this->inverted_lists_[term_id].ids_[i];
-                dists[doc_id] += product[term_index][i];
-                if (doc_id < cur_min) {
-                    cur_min = doc_id;
+            const InvertedList& list = inverted_lists_[term_id];
+            for (; doc_id_index < product[term_index].size() &&
+                   list.ids_[doc_id_index] < start + window_size_;
+                 doc_id_index++) {
+                auto doc_id = list.ids_[doc_id_index];
+                dists[doc_id - start] += product[term_index][doc_id_index];
+            }
+            if (doc_id_index < product[term_index].size()) {
+                list_index[term_index] = doc_id_index;
+                auto doc_id = list.ids_[doc_id_index];
+                if (doc_id < next_start) {
+                    next_start = doc_id;
                 }
-                // if (doc_id > cur_max) {
-                //     cur_max = doc_id;
-                // }
+            } else {
+                list_index[term_index] = -1;
             }
         }
-        for (auto j = last_min; j < cur_min; ++j) {
-            if (dists[j] == 0) {
-                continue;
-            }
-            if (heap.size() < k || dists[j] < cur_heap_top) {
-                heap.emplace(dists[j], j);
-            }
 
+        for (auto i = 0; i < window_size_; ++i) {
+            //dists[i + start]入堆
+            if (heap.size() < k or dists[i] < cur_heap_top) {
+                heap.emplace(dists[i], i + start);
+            }
             if (heap.size() > k) {
                 heap.pop();
             }
-
-            if (!heap.empty()) {
-                cur_heap_top = heap.top().first;
-            }
+            cur_heap_top = heap.top().first;
+            dists[i] = 0;
         }
-        //std::cout << cur_max - cur_min << " " << std::endl;;
-        last_min = cur_min;
-        cur_min = UINT32_MAX;
-        //cur_max = 0;
+
+        start = next_start;
+        next_start = UINT32_MAX;
     }
-    //uint32_t avg_diff = 0;
-
-    // for(const auto &diff : diff_min_max) {
-    //     avg_diff += diff;
-    // }
-
-    //std::cout << "avg diff: " << static_cast<float>(avg_diff) / static_cast<float>(max_term_doc_num) << " ";
 
     for (auto j = static_cast<int64_t>(heap.size() - 1); j >= 0; --j) {
         res_dists[j] = heap.top().first;

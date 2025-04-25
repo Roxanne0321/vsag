@@ -141,5 +141,6 @@ extern const char* const SUMMARY_ENERGY;
 extern const char* const HEAP_FACTOR;
 extern const char* const INDEX_CLUSTER_DIM_SIZE;
 extern const char* const INDEX_SEARCH_NUM;
+extern const char* const WINDOW_SIZE;
 
 }  // namespace vsag

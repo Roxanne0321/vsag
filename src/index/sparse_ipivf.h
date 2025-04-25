@@ -176,7 +176,8 @@ private:
     search_one_query(const SparseVector& query_vector,
                      int64_t k,
                      int64_t* res_ids,
-                     float* res_dists) const;
+                     float* res_dists,
+                     std::vector<float> &win_dists) const;
 
     void
     multiply(std::vector<std::pair<uint32_t, float>> &query_pair,
@@ -216,6 +217,7 @@ private:
     //parameters
     mutable size_t query_cut_;
     mutable int num_threads_;
+    mutable uint32_t window_size_;
     DocPruneStrategy doc_prune_strategy_;
     VectorPruneStrategy vector_prune_strategy_;
     //mutex
