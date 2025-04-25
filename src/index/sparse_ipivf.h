@@ -122,11 +122,12 @@ public:
 
     tl::expected<void, Error>
     Serialize(std::ostream& out_stream) override {
-        return {};
+        SAFE_CALL(return this->serialize(out_stream));
     }
 
     tl::expected<void, Error>
     Deserialize(std::istream& in_stream) override {
+        SAFE_CALL(return this->deserialize(in_stream));
         return {};
     }
 
@@ -193,6 +194,12 @@ private:
     cal_serialize_size() const {
         return 0;
     }
+
+    tl::expected<void, Error>
+    serialize(std::ostream& out_stream);
+
+    tl::expected<void, Error>
+    deserialize(std::istream& in_stream);
 
 private:
     struct InvertedList {

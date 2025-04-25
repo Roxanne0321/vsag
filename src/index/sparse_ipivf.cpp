@@ -24,6 +24,48 @@ SparseIPIVF::SparseIPIVF(const SparseIPIVFParameters& param,
     allocator_ = index_common_param.allocator_;
 }
 
+tl::expected<void, Error>
+SparseIPIVF::serialize(std::ostream& out_stream) {
+    out_stream.write(reinterpret_cast<const char*>(&total_count_), sizeof(total_count_));
+    out_stream.write(reinterpret_cast<const char*>(&data_dim_), sizeof(data_dim_));
+
+    for (uint32_t i = 0; i < data_dim_; ++i) {
+        const InvertedList& list = inverted_lists_[i];
+
+        out_stream.write(reinterpret_cast<const char*>(&list.doc_num_), sizeof(list.doc_num_));
+
+        if (list.doc_num_ > 0) {
+            out_stream.write(reinterpret_cast<const char*>(list.ids_),
+                             list.doc_num_ * sizeof(uint32_t));
+            out_stream.write(reinterpret_cast<const char*>(list.vals_),
+                             list.doc_num_ * sizeof(float));
+        }
+    }
+
+    return {};
+}
+
+tl::expected<void, Error>
+SparseIPIVF::deserialize(std::istream& in_stream) {
+    in_stream.read(reinterpret_cast<char*>(&total_count_), sizeof(total_count_));
+    in_stream.read(reinterpret_cast<char*>(&data_dim_), sizeof(data_dim_));
+
+    inverted_lists_ = new InvertedList[data_dim_];
+
+    for (uint32_t i = 0; i < data_dim_; ++i) {
+        InvertedList& list = inverted_lists_[i];
+        in_stream.read(reinterpret_cast<char*>(&list.doc_num_), sizeof(list.doc_num_));
+
+        if (list.doc_num_ > 0) {
+            list.ids_ = new uint32_t[list.doc_num_];
+            list.vals_ = new float[list.doc_num_];
+            in_stream.read(reinterpret_cast<char*>(list.ids_), list.doc_num_ * sizeof(uint32_t));
+            in_stream.read(reinterpret_cast<char*>(list.vals_), list.doc_num_ * sizeof(float));
+        }
+    }
+    return {};
+}
+
 std::vector<uint32_t>
 SparseIPIVF::get_top_n_indices(const SparseVector& vec, uint32_t n) {
     std::vector<uint32_t> indices(vec.dim_);
@@ -256,12 +298,12 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
 }
 
 void
-SparseIPIVF::accumulation_scan(std::vector<std::pair<uint32_t, float>> &query_pair,
-                          std::vector<float>& dists,
-                          std::vector<std::vector<float>>& product,
-                          int64_t k,
-                          int64_t* res_ids,
-                          float* res_dists) const {
+SparseIPIVF::accumulation_scan(std::vector<std::pair<uint32_t, float>>& query_pair,
+                               std::vector<float>& dists,
+                               std::vector<std::vector<float>>& product,
+                               int64_t k,
+                               int64_t* res_ids,
+                               float* res_dists) const {
     MaxHeap heap(this->allocator_.get());
     float cur_heap_top = std::numeric_limits<float>::max();
 
@@ -277,7 +319,7 @@ SparseIPIVF::accumulation_scan(std::vector<std::pair<uint32_t, float>> &query_pa
             continue;
         }
 
-        if(term_doc_num > max_term_doc_num) {
+        if (term_doc_num > max_term_doc_num) {
             max_term_doc_num = term_doc_num;
         }
 
@@ -350,7 +392,7 @@ SparseIPIVF::accumulation_scan(std::vector<std::pair<uint32_t, float>> &query_pa
 }
 
 void
-SparseIPIVF::multiply(std::vector<std::pair<uint32_t, float>> &query_pair,
+SparseIPIVF::multiply(std::vector<std::pair<uint32_t, float>>& query_pair,
                       std::vector<std::vector<float>>& product) const {
     for (uint32_t i = 0; i < query_pair.size(); ++i) {
         uint32_t term_id = query_pair[i].first;
