@@ -20,6 +20,7 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <chrono>
 
 #include "../utils.h"
 #include "base_filter_functor.h"
@@ -177,7 +178,9 @@ private:
                      int64_t k,
                      int64_t* res_ids,
                      float* res_dists,
-                     std::vector<float> &win_dists) const;
+                     std::vector<float> &win_dists,
+                     long long &accumulation_time,
+                     long long &scan_time) const;
 
     void
     multiply(std::vector<std::pair<uint32_t, float>> &query_pair,
@@ -186,10 +189,12 @@ private:
     void
     accumulation_scan(std::vector<std::pair<uint32_t, float>> &query_pair,
                  std::vector<float>& dists,
-                 std::vector<std::vector<float>>& product,
+                 //std::vector<std::vector<float>>& product,
                  int64_t k,
                  int64_t* res_ids,
-                 float* res_dists) const;
+                 float* res_dists,
+                 long long &accumulation_time,
+                 long long &scan_time) const;
 
     uint64_t
     cal_serialize_size() const {
