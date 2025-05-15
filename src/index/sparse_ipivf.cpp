@@ -362,15 +362,11 @@ SparseIPIVF::accumulation_scan(std::vector<std::pair<uint32_t, float>>& query_pa
             float query_val = -query_pair[term_index].second;
             auto term_id = query_pair[term_index].first;
             const InvertedList& list = inverted_lists_[term_id];
-            uint32_t temp_num = list.offsets_[window_index + 1] - list.offsets_[window_index];
-            std::vector<float> product(temp_num);
-            //avx512
-            FP32ComputeSIP(&query_val, list.vals_ + list.offsets_[window_index], product.data(), temp_num);
             for (auto doc_id_index = list.offsets_[window_index];
                  doc_id_index < list.offsets_[window_index + 1];
                  ++doc_id_index) { 
                 auto doc_id = list.ids_[doc_id_index];
-                dists[doc_id - start] += product[doc_id_index - list.offsets_[window_index]];
+                dists[doc_id - start] += list.vals_[doc_id_index] * query_val;
             }
         }
         auto end_time_1 = std::chrono::high_resolution_clock::now();
