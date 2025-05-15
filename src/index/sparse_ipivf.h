@@ -44,6 +44,7 @@ public:
                 if (this->inverted_lists_[i].doc_num_ != 0) {
                     delete[] this->inverted_lists_[i].ids_;
                     delete[] this->inverted_lists_[i].vals_;
+                    delete[] this->inverted_lists_[i].offsets_;
                 }
             }
             delete[] this->inverted_lists_;
@@ -156,6 +157,9 @@ private:
     std::vector<int64_t>
     build(const DatasetPtr& data);
 
+    void
+    build_inverted_lists(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
+
     std::vector<uint32_t>
     get_top_n_indices(const SparseVector& vec, uint32_t n);
 
@@ -212,17 +216,19 @@ private:
         uint32_t doc_num_{0};
         uint32_t* ids_{nullptr};
         float* vals_{nullptr};
+        uint32_t* offsets_{nullptr};
     };
 
-    uint32_t data_dim_{0};
-    uint32_t total_count_{0};
+    uint32_t data_dim_{0}; //构建存储
+    uint32_t total_count_{0}; //构建存储
     std::shared_ptr<Allocator> allocator_{nullptr};
     InvertedList* inverted_lists_{nullptr};
 
     //parameters
     mutable size_t query_cut_;
     mutable int num_threads_;
-    mutable uint32_t window_size_;
+    uint32_t window_size_; //构建存储
+    uint32_t window_num_; //构建存储
     DocPruneStrategy doc_prune_strategy_;
     VectorPruneStrategy vector_prune_strategy_;
     //mutex

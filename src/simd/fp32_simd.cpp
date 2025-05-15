@@ -14,7 +14,6 @@
 // limitations under the License.
 
 #include "fp32_simd.h"
-
 #include "simd_status.h"
 
 namespace vsag {
@@ -69,7 +68,7 @@ static FP32SparseComputeType
 GetFP32ComputeSIP() {
     if (SimdStatus::SupportAVX512()) {
 #if defined(ENABLE_AVX512)
-        return avx512::FP32ComputeSIP;
+    return avx512::FP32ComputeSIP;
 #endif
     }
     return generic::FP32ComputeSIP;

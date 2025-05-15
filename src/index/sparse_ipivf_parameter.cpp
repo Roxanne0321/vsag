@@ -22,6 +22,10 @@ SparseIPIVFParameters
 SparseIPIVFParameters::FromJson(JsonType& sparse_ipivf_param_obj, IndexCommonParam index_common_param) {
     SparseIPIVFParameters obj;
 
+    if (sparse_ipivf_param_obj.contains(WINDOW_SIZE)) {
+        obj.window_size = sparse_ipivf_param_obj[WINDOW_SIZE];
+    }
+
     if (!sparse_ipivf_param_obj.contains(VECTOR_PRUNE_STRATEGY)) {
         throw std::invalid_argument(
             fmt::format("parameters must contains {}", VECTOR_PRUNE_STRATEGY));
@@ -94,9 +98,6 @@ SparseIPIVFSearchParameters::FromJson(const std::string& json_string) {
     }
     if (params[INDEX_SPARSE_IPIVF].contains(QUERY_CUT)) {
         obj.query_cut = params[INDEX_SPARSE_IPIVF][QUERY_CUT];
-    }
-    if (params[INDEX_SPARSE_IPIVF].contains(WINDOW_SIZE)) {
-        obj.window_size = params[INDEX_SPARSE_IPIVF][WINDOW_SIZE];
     }
 
     return obj;
