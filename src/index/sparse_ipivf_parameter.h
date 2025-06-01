@@ -27,7 +27,9 @@ public:
 public:
     DocPruneStrategy doc_prune_strategy;
     VectorPruneStrategy vector_prune_strategy;
+    BuildStrategy build_strategy;
     uint32_t window_size{1};
+    
 
 protected:
     SparseIPIVFParameters() = default;

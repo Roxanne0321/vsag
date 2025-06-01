@@ -54,26 +54,6 @@ SparseComputeIP(const SparseVector& sv1, const SparseVector& sv2) {
     return -sum;
 }
 
-std::vector<uint32_t>
-SparseIVF::get_top_n_indices(const SparseVector& vec, uint32_t n) {
-    // 创建索引数组来追踪排序
-    std::vector<uint32_t> indices(vec.dim_);
-    for (uint32_t i = 0; i < vec.dim_; ++i) {
-        indices[i] = i;
-    }
-    if (n >= vec.dim_) {
-        return indices;
-    }
-
-    // 使用std::nth_element 找到第n个最大的值的位置
-    std::nth_element(
-        indices.begin(), indices.begin() + n, indices.end(), [&](uint32_t a, uint32_t b) {
-            return vec.vals_[a] > vec.vals_[b];  // 降序比较
-        });
-
-    return indices;
-}
-
 SparseIVF::SparseIVF(const SparseIVFParameters& param, const IndexCommonParam& index_common_param) {
     doc_prune_strategy_ = param.doc_prune_strategy;
     build_strategy_ = param.build_strategy;
@@ -166,12 +146,12 @@ SparseIVF::build(const DatasetPtr& base) {
     }
 
     if (doc_prune_strategy_.type == DocPruneStrategyType::FixedSize) {
-        fixed_pruning(word_map, doc_prune_strategy_.parameters.fixedSize.n_postings);
+        fixed_pruning(word_map, doc_prune_strategy_.parameters.fixedSize.n_postings, this->data_dim_);
     } else if (doc_prune_strategy_.type == DocPruneStrategyType::GlobalPrune) {
-        global_pruning(word_map, doc_prune_strategy_.parameters.globalPrune.n_postings);
+        global_pruning(word_map, doc_prune_strategy_.parameters.globalPrune.n_postings, this->data_dim_);
         fixed_pruning(word_map,
                       doc_prune_strategy_.parameters.globalPrune.n_postings *
-                          doc_prune_strategy_.parameters.globalPrune.fraction);
+                          doc_prune_strategy_.parameters.globalPrune.fraction, this->data_dim_);
     }
 
     unique_dim_ = word_map.size();
@@ -218,18 +198,6 @@ SparseIVF::build_inverted_lists(
             }
         }
     }
-/*     for (uint32_t i = 0; i < 2000; ++i) {
-        if (this->inverted_lists_[i].doc_num_ != 0) {
-            std::cout << "inverted list " << i << " has " << this->inverted_lists_[i].doc_num_
-                      << " docs" << std::endl;
-            if (this->inverted_lists_[i].doc_num_ != 0) {
-                for (auto j = 0; j < this->inverted_lists_[i].doc_num_; j++) {
-                    std::cout << this->inverted_lists_[i].ids_[j] << " ";
-                }
-                std::cout << std::endl;
-            }
-        }
-    } */
 }
 
 void
@@ -246,12 +214,6 @@ SparseIVF::build_posting_lists(
         auto it = word_map.find(i);
         if (it != word_map.end()) {
             std::lock_guard<std::mutex> lock(ivf_mutex[i]);
-            /* int thread_id = omp_get_thread_num();
-            int total_threads = omp_get_num_threads();
-            printf("build list %d on thread %d of %d\n", i, thread_id, total_threads);  */
-            /* if (i % 1000 == 0) {
-                std::cout << i << std::endl;
-            }  */
             const auto& doc_infos = it->second;
             uint32_t doc_num = static_cast<uint32_t>(doc_infos.size());
 
@@ -262,8 +224,6 @@ SparseIVF::build_posting_lists(
             build_posting_list(posting_ids, i);
         }
     }
-
-    //print_posting_lists();
 }
 
 void
@@ -336,11 +296,6 @@ SparseIVF::do_kmeans_on_doc_id(std::vector<uint32_t> posting_ids,
     std::shuffle(posting_ids.begin(), posting_ids.end(), gen);
     centroid_ids.assign(posting_ids.begin(), posting_ids.begin() + n_centroids);
 
-    /* std::cout << "centroid ids: " << std::endl;
-    for(auto id : centroid_ids) {
-        std::cout << id << " ";
-    }
-    std::cout << std::endl; */
     for (auto doc_id : posting_ids) {
         SparseVector doc_vector = this->data_[doc_id];
         int argmin = 0;
@@ -358,7 +313,7 @@ SparseIVF::do_kmeans_on_doc_id(std::vector<uint32_t> posting_ids,
         clusters[argmin].emplace_back(doc_id);
     }
 
-    std::vector<uint32_t> to_be_replaced;  // docids that belong to too small clusters
+    std::vector<uint32_t> to_be_replaced; 
 
     for (int i = 0; i < n_centroids; i++) {
         if (clusters[i].size() > 0 &&
@@ -386,16 +341,6 @@ SparseIVF::do_kmeans_on_doc_id(std::vector<uint32_t> posting_ids,
         }
         clusters[argmin].emplace_back(doc_id);
     }
-
-    /* for (size_t i = 0; i < clusters.size(); ++i) {
-        if(clusters.size() > 0){
-            std::cout << "Cluster " << i << ": ";
-        for (const auto& doc_id : clusters[i]) {
-            std::cout << doc_id << " ";
-        }
-        std::cout << std::endl;
-        }
-    } */
 }
 
 void
@@ -442,75 +387,6 @@ SparseIVF::energy_preserving_summary(std::vector<uint32_t>& ids,
 
     for (auto tid : ids) {
         vals.emplace_back(hash[tid]);
-    }
-}
-
-void
-SparseIVF::fixed_pruning(
-    std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map,
-    int n_postings) {
-    //int unique_term_ids = 0;
-    for (uint32_t i = 0; i < this->data_dim_; ++i) {
-        if (word_map.find(i) != word_map.end()) {
-            //unique_term_ids ++;
-            auto& doc_infos = word_map[i];
-
-            std::sort(doc_infos.begin(),
-                      doc_infos.end(),
-                      [](const std::pair<uint32_t, float> a, const std::pair<uint32_t, float> b) {
-                          return a.second > b.second;
-                      });
-
-            if (doc_infos.size() > n_postings) {
-                doc_infos.resize(n_postings);
-            }
-
-            word_map[i] = doc_infos;
-        }
-    }
-    //std::cout << "unique term id: " << unique_term_ids << std::endl;
-}
-
-void
-SparseIVF::global_pruning(
-    std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map,
-    int n_postings) {
-    // Calculate total postings to select
-    size_t total_postings = this->data_dim_ * n_postings;  //seismic中是整个倒排列表的长度
-
-    // Collect all postings in a single vector with additional information
-    std::vector<std::tuple<float, uint32_t, uint32_t>> postings;  // (score, docid, word_id)
-
-    for (const auto& kv : word_map) {
-        uint32_t word_id = kv.first;
-        for (const auto& doc_info : kv.second) {
-            postings.emplace_back(doc_info.second, doc_info.first, word_id);
-        }
-    }
-
-    // Determine the actual number of postings to select
-    total_postings = std::min(total_postings, postings.size());
-
-    // Partially sort the postings to find the n-th largest element
-    std::nth_element(postings.begin(),
-                     postings.begin() + total_postings,
-                     postings.end(),
-                     [](const std::tuple<float, uint32_t, uint32_t>& a,
-                        const std::tuple<float, uint32_t, uint32_t>& b) {
-                         return std::get<0>(a) > std::get<0>(b);
-                     });
-
-    // Clear the word_map and add back the selected postings
-    for (auto& kv : word_map) {
-        kv.second.clear();
-    }
-
-    for (auto it = postings.begin(); it != postings.begin() + total_postings; ++it) {
-        float score = std::get<0>(*it);
-        uint32_t docid = std::get<1>(*it);
-        uint32_t word_id = std::get<2>(*it);
-
-        word_map[word_id].emplace_back(docid, score);
     }
 }
 

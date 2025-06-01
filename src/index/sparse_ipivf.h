@@ -21,18 +21,15 @@
 #include <iostream>
 #include <mutex>
 #include <chrono>
+#include <unordered_set>
 
-#include "../utils.h"
-#include "base_filter_functor.h"
 #include "common.h"
 #include "safe_allocator.h"
 #include "simd/fp32_simd.h"
-#include "simd/simd.h"
 #include "sparse_ipivf_parameter.h"
-#include "stream_reader.h"
-#include "stream_writer.h"
 #include "typing.h"
 #include "vsag/index.h"
+#include "algorithm/seismic/utils.h"
 
 namespace vsag {
 class SparseIPIVF : public Index {
@@ -45,6 +42,7 @@ public:
                     delete[] this->inverted_lists_[i].ids_;
                     delete[] this->inverted_lists_[i].vals_;
                     delete[] this->inverted_lists_[i].offsets_;
+                    delete[] this->inverted_lists_[i].flag_;
                 }
             }
             delete[] this->inverted_lists_;
@@ -158,18 +156,14 @@ private:
     build(const DatasetPtr& data);
 
     void
+    vector_prune(const SparseVector* sparse_ptr, 
+                 std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
+
+    void
+    list_prune(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
+
+    void
     build_inverted_lists(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
-
-    std::vector<uint32_t>
-    get_top_n_indices(const SparseVector& vec, uint32_t n);
-
-    void
-    fixed_pruning(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map,
-                  int n_postings);
-
-    void
-    global_pruning(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map,
-                   int n_postings);
 
     DatasetPtr
     knn_search(const DatasetPtr& query,
@@ -182,23 +176,19 @@ private:
                      int64_t k,
                      int64_t* res_ids,
                      float* res_dists,
-                     std::vector<float> &win_dists,
-                     long long &accumulation_time,
-                     long long &scan_time) const;
+                     std::vector<float> &win_dists) const;
 
     void
     multiply(std::vector<std::pair<uint32_t, float>> &query_pair,
              std::vector<std::vector<float>>& product) const;
 
     void
-    accumulation_scan(std::vector<std::pair<uint32_t, float>> &query_pair,
+    accumulation_scan(const SparseVector& query_vector,
                  std::vector<float>& dists,
                  //std::vector<std::vector<float>>& product,
                  int64_t k,
                  int64_t* res_ids,
-                 float* res_dists,
-                 long long &accumulation_time,
-                 long long &scan_time) const;
+                 float* res_dists) const;
 
     uint64_t
     cal_serialize_size() const {
@@ -217,6 +207,7 @@ private:
         uint32_t* ids_{nullptr};
         float* vals_{nullptr};
         uint32_t* offsets_{nullptr};
+        uint8_t* flag_{nullptr};
     };
 
     uint32_t data_dim_{0}; //构建存储
@@ -231,6 +222,7 @@ private:
     uint32_t window_num_; //构建存储
     DocPruneStrategy doc_prune_strategy_;
     VectorPruneStrategy vector_prune_strategy_;
+    BuildStrategy build_strategy_;
     //mutex
     std::vector<std::mutex> ivf_mutex;
 };

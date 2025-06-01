@@ -14,16 +14,13 @@
 
 #pragma once
 
-#include "../utils.h"
-#include "base_filter_functor.h"
 #include "common.h"
 #include "safe_allocator.h"
 #include "sparse_ivf_parameter.h"
-#include "stream_reader.h"
-#include "stream_writer.h"
 #include "typing.h"
 #include "vsag/index.h"
 #include "algorithm/seismic/summary.h"
+#include "algorithm/seismic/utils.h"
 #include <iostream>
 #include <omp.h>
 #include <algorithm>
@@ -166,8 +163,6 @@ public:
     }
 
 private:
-    std::vector<uint32_t>
-    get_top_n_indices(const SparseVector& vec, uint32_t n);
 
     std::vector<int64_t>
     build(const DatasetPtr& data);
@@ -183,12 +178,6 @@ private:
 
     void
     do_kmeans_on_doc_id(std::vector<uint32_t> posting_ids, std::vector<std::vector<uint32_t>>& clusters, int n_centroids);
-
-    void
-    fixed_pruning(std::unordered_map <uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map, int n_postings);
-
-    void
-    global_pruning(std::unordered_map <uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map, int n_postings);
 
     void
     energy_preserving_summary(std::vector<uint32_t>& ids, std::vector<float>& vals, std::vector<uint32_t> block, float fraction);
