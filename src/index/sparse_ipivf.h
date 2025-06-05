@@ -42,7 +42,6 @@ public:
                     delete[] this->inverted_lists_[i].ids_;
                     delete[] this->inverted_lists_[i].vals_;
                     delete[] this->inverted_lists_[i].offsets_;
-                    delete[] this->inverted_lists_[i].flag_;
                 }
             }
             delete[] this->inverted_lists_;
@@ -179,10 +178,6 @@ private:
                      std::vector<float> &win_dists) const;
 
     void
-    multiply(std::vector<std::pair<uint32_t, float>> &query_pair,
-             std::vector<std::vector<float>>& product) const;
-
-    void
     accumulation_scan(const SparseVector& query_vector,
                  std::vector<float>& dists,
                  //std::vector<std::vector<float>>& product,
@@ -207,7 +202,6 @@ private:
         uint32_t* ids_{nullptr};
         float* vals_{nullptr};
         uint32_t* offsets_{nullptr};
-        uint8_t* flag_{nullptr};
     };
 
     uint32_t data_dim_{0}; //构建存储

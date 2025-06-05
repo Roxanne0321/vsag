@@ -25,7 +25,7 @@ public:
     FromJson(JsonType& sparse_kmeans_param_obj, IndexCommonParam index_common_param);
 
 public:
-    uint32_t cluster_dim_size{0};
+    uint32_t cluster_num{0};
 
 protected:
     SparseKmeansParameters() = default;

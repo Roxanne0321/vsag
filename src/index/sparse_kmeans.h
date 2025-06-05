@@ -14,44 +14,42 @@
 
 #pragma once
 
+#include <omp.h>
+
+#include <algorithm>
+#include <fstream>
+#include <iostream>
+#include <mutex>
+
 #include "../utils.h"
-#include "base_filter_functor.h"
 #include "common.h"
 #include "safe_allocator.h"
 #include "sparse_kmeans_parameters.h"
-#include "stream_reader.h"
-#include "stream_writer.h"
 #include "typing.h"
 #include "vsag/index.h"
-#include <iostream>
-#include <omp.h>
-#include <algorithm>
-#include <mutex>
-#include <fstream>
 
 namespace vsag {
 class SparseKmeans : public Index {
 public:
     SparseKmeans(const SparseKmeansParameters& param, const IndexCommonParam& index_common_param);
     ~SparseKmeans() {
-     if (this->data_){
-        for(int i = 0; i < this->total_count_; i++) {
-            delete[] this->data_[i].ids_;
-            delete[] this->data_[i].vals_;
+        if (this->cluster_lists_) {
+            for (int i = 0; i < cluster_num_; ++i) {
+                if (cluster_lists_[i].inverted_lists_) {
+                    for (int j = 0; j < this->data_dim_; ++j) {
+                        if (this->cluster_lists_[i].inverted_lists_[j].doc_num_ != 0) {
+                            delete[] this->cluster_lists_[i].inverted_lists_[j].ids_;
+                            delete[] this->cluster_lists_[i].inverted_lists_[j].vals_;
+                        }
+                    }
+                    delete[] this->cluster_lists_[i].inverted_lists_;
+                }
+            }
+            delete[] this->cluster_lists_;
         }
-        delete[] this->data_;
-     }
 
-     if (this->cluster_center){
-        for(int i = 0; i < this->cluster_num; i++) {
-            delete[] this->cluster_center[i].ids_;
-            delete[] this->cluster_center[i].vals_;
-        }
-        delete[] this->cluster_center;
-     }
-
-    allocator_.reset();
-}
+        allocator_.reset();
+    }
 
 public:
     tl::expected<std::vector<int64_t>, Error>
@@ -121,11 +119,12 @@ public:
 
     tl::expected<void, Error>
     Serialize(std::ostream& out_stream) override {
-        return {};
+        SAFE_CALL(return this->serialize(out_stream));
     }
 
     tl::expected<void, Error>
     Deserialize(std::istream& in_stream) override {
+        SAFE_CALL(return this->deserialize(in_stream));
         return {};
     }
 
@@ -153,6 +152,19 @@ private:
     std::vector<int64_t>
     build(const DatasetPtr& data);
 
+    void
+    partition_into_clusters(const SparseVector* sparse_ptr,
+                            std::vector<std::vector<uint32_t>>& clusters);
+
+    void
+    build_cluster_lists(const SparseVector* sparse_ptr,
+                        std::vector<std::vector<uint32_t>>& clusters);
+
+    void 
+    compute_ip_with_cluster_centers(std::vector<float> &results, const SparseVector& sv);
+
+    void 
+    compute_ip_with_cluster_centers(std::vector<float> &results, const SparseVector& sv) const;
 
     DatasetPtr
     knn_search(const DatasetPtr& query,
@@ -165,29 +177,52 @@ private:
                      int64_t k,
                      int64_t* res_ids,
                      float* res_dists,
-                     uint32_t& dist_cmp) const;
-    
+                     long long &search_data_num) const;
+
+    void
+    search_one_cluster(const SparseVector& query_vector,
+                       uint32_t cluster_id,
+                       std::vector<float> &dists,
+                       int64_t k,
+                       MaxHeap &heap,
+                       float cur_heap_top) const;
 
     uint64_t
     cal_serialize_size() const {
         return 0;
     }
 
+    tl::expected<void, Error>
+    serialize(std::ostream& out_stream);
+
+    tl::expected<void, Error>
+    deserialize(std::istream& in_stream);
+
 private:
+    struct InvertedList {
+        uint32_t doc_num_{0};
+        uint32_t* ids_{nullptr};
+        float* vals_{nullptr};
+    };
+
+    struct ClusterLists {
+        uint32_t doc_num_{0};
+        std::vector<uint32_t> doc_ids_;
+        InvertedList* inverted_lists_{nullptr};
+    };
+
     uint32_t data_dim_{0};
-    uint32_t unique_dim_{0};
     uint32_t total_count_{0};
-    std::unordered_map<uint32_t, float> termid_maxvalue;
+    uint32_t max_cluster_doc_num_{0};
     std::shared_ptr<Allocator> allocator_{nullptr};
-    SparseVector* data_;
 
-    uint32_t cluster_dim_size;
-    uint32_t cluster_num;
-    SparseVector* cluster_center;
-    std::vector<std::vector<uint32_t>> clusters;
+    uint32_t cluster_num_;
+    uint32_t cluster_dim_size_;
+    ClusterLists* cluster_lists_{nullptr};
+    std::vector<float> term_max_val_; // 当做簇心处理
 
-//parameters
+    //parameters
     mutable int num_threads_;
-    mutable uint32_t search_num;
+    mutable uint32_t search_num_;
 };
 }  // namespace vsag

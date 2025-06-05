@@ -239,7 +239,6 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
 void
 SparseIPIVF::accumulation_scan(const SparseVector& query_vector,
                                std::vector<float>& dists,
-                               //std::vector<std::vector<float>>& product,
                                int64_t k,
                                int64_t* res_ids,
                                float* res_dists) const {
@@ -265,38 +264,6 @@ SparseIPIVF::accumulation_scan(const SparseVector& query_vector,
             }
         }
 
-        // auto end_time_1 = std::chrono::high_resolution_clock::now();
-        // accumulation_time +=
-        //     std::chrono::duration_cast<std::chrono::nanoseconds>(end_time_1 - start_time_1).count();
-
-        // auto start_time_2 = std::chrono::high_resolution_clock::now();
-
-        // for (auto term_index = 0; term_index < query_vector.dim_; term_index++) {
-        //     auto term_id = query_vector.ids_[term_index];
-        //     const InvertedList& list = inverted_lists_[term_id];
-        //     if (list.doc_num_ == 0) [[unlikely]] {
-        //         continue;
-        //     }
-        //     for (auto doc_id_index = list.offsets_[window_index];
-        //          doc_id_index < list.offsets_[window_index + 1];
-        //          ++doc_id_index) {
-        //         auto doc_id = list.ids_[doc_id_index];
-        //         auto temp_id = doc_id - start;
-        //         if (dists[temp_id] < cur_heap_top or heap.size() < k) {
-        //             if (heap_ids.find(doc_id) == heap_ids.end()) {  //没找到
-        //                 heap_ids.insert(doc_id);
-        //                 heap.emplace(dists[temp_id], doc_id);
-        //             }
-        //         }
-        //         if (heap.size() > k) {
-        //             heap.pop();
-        //             heap_ids.erase(heap.top().first);
-        //         }
-        //         cur_heap_top = heap.top().first;
-        //         dists[temp_id] = 0;
-        //     }
-        // }
-
         for (auto i = 0; i < window_size_; ++i) { // 最后一个window size
             // dists[i + start]入堆
             if (dists[i] >= cur_heap_top) [[likely]] {
@@ -313,35 +280,10 @@ SparseIPIVF::accumulation_scan(const SparseVector& query_vector,
         }
     }
 
-    // auto end_time_2 = std::chrono::high_resolution_clock::now();
-    // scan_time +=
-    //     std::chrono::duration_cast<std::chrono::nanoseconds>(end_time_2 - start_time_2).count();
-    // }
-
     for (auto j = static_cast<int64_t>(heap.size() - 1); j >= 0; --j) {
         res_dists[j] = -heap.top().first;
         res_ids[j] = heap.top().second;
         heap.pop();
-    }
-}
-
-void
-SparseIPIVF::multiply(std::vector<std::pair<uint32_t, float>>& query_pair,
-                      std::vector<std::vector<float>>& product) const {
-    for (uint32_t i = 0; i < query_pair.size(); ++i) {
-        uint32_t term_id = query_pair[i].first;
-        auto term_doc_num = this->inverted_lists_[term_id].doc_num_;
-
-        if (term_doc_num == 0) {
-            continue;
-        }
-
-        product[i].resize(term_doc_num);
-
-        float q_val = -query_pair[i].second;
-
-        FP32ComputeSIP(
-            &q_val, this->inverted_lists_[term_id].vals_, product[i].data(), term_doc_num);
     }
 }
 }  // namespace vsag

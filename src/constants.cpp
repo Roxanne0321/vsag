@@ -142,7 +142,7 @@ const char* const MIN_CLUSTER_SIZE = "min_cluster_size";
 const char* const CENTROID_FRACTION = "centroid_fraction";
 const char* const SUMMARY_ENERGY = "summary_energy";
 const char* const HEAP_FACTOR = "heap_factor";
-const char* const INDEX_CLUSTER_DIM_SIZE = "cluster_dim_size";
+const char* const INDEX_CLUSTER_NUM = "cluster_num";
 const char* const INDEX_SEARCH_NUM = "search_num";
 const char* const WINDOW_SIZE = "window_size";
 
