@@ -28,11 +28,8 @@ SparseKmeans::serialize(std::ostream& out_stream) {
                      sizeof(max_cluster_doc_num_));
     // cluster_num
     out_stream.write(reinterpret_cast<const char*>(&cluster_num_), sizeof(cluster_num_));
-    // cluster_dim_size
-    out_stream.write(reinterpret_cast<const char*>(&cluster_dim_size_), sizeof(cluster_dim_size_));
-    // term_max_val
-    out_stream.write(reinterpret_cast<const char*>(term_max_val_.data()),
-                     data_dim_ * sizeof(float));
+
+    summaries.serialize(out_stream);
 
     for (auto cluster_index = 0; cluster_index < cluster_num_; cluster_index++) {
         const ClusterLists& cluster = cluster_lists_[cluster_index];
@@ -64,8 +61,8 @@ SparseKmeans::deserialize(std::istream& in_stream) {
     in_stream.read(reinterpret_cast<char*>(&data_dim_), sizeof(data_dim_));
     in_stream.read(reinterpret_cast<char*>(&max_cluster_doc_num_), sizeof(max_cluster_doc_num_));
     in_stream.read(reinterpret_cast<char*>(&cluster_num_), sizeof(cluster_num_));
-    in_stream.read(reinterpret_cast<char*>(&cluster_dim_size_), sizeof(cluster_dim_size_));
-    in_stream.read(reinterpret_cast<char*>(term_max_val_.data()), data_dim_ * sizeof(float));
+
+    summaries.deserialize(in_stream);
 
     cluster_lists_ = new ClusterLists[cluster_num_];
 
@@ -99,6 +96,9 @@ SparseKmeans::deserialize(std::istream& in_stream) {
 SparseKmeans::SparseKmeans(const SparseKmeansParameters& param,
                            const IndexCommonParam& index_common_param) {
     this->cluster_num_ = param.cluster_num;
+    this->min_cluster_size_ = param.min_cluster_size;
+    this->summary_energy_ = param.summary_energy;
+    this->kmeans_iter_ = param.kmeans_iter;
     allocator_ = index_common_param.allocator_;
 }
 
@@ -106,33 +106,14 @@ std::vector<int64_t>
 SparseKmeans::build(const DatasetPtr& base) {
     const SparseVector* sparse_ptr = base->GetSparseVectors();
     this->total_count_ = base->GetNumElements();
-    std::vector<std::vector<uint32_t>> clusters;
+    std::vector<std::vector<uint32_t>> clusters(cluster_num_);
 
-    uint32_t total_num = 0;
+    int num_threads = omp_get_max_threads();
+    omp_set_num_threads(num_threads);
+    
     partition_into_clusters(sparse_ptr, clusters);
     build_cluster_lists(sparse_ptr, clusters);
     return {};
-}
-
-void
-SparseKmeans::compute_ip_with_cluster_centers(std::vector<float>& results, const SparseVector& sv) {
-    results.resize(cluster_num_, 0.0);
-
-    for (auto i = 0; i < sv.dim_; ++i) {
-        auto cluster_id = sv.ids_[i] / cluster_dim_size_;
-        results[cluster_id] += sv.vals_[i] * term_max_val_[sv.ids_[i]];
-    }
-}
-
-void
-SparseKmeans::compute_ip_with_cluster_centers(std::vector<float>& results,
-                                              const SparseVector& sv) const {
-    results.resize(cluster_num_, 0.0);
-
-    for (auto i = 0; i < sv.dim_; ++i) {
-        auto cluster_id = sv.ids_[i] / cluster_dim_size_;
-        results[cluster_id] += sv.vals_[i] * term_max_val_[sv.ids_[i]];
-    }
 }
 
 void
@@ -148,33 +129,34 @@ SparseKmeans::partition_into_clusters(const SparseVector* sparse_ptr,
 
     data_dim_ += 1;
 
-    term_max_val_.resize(data_dim_);
+    std::vector<uint32_t> doc_ids(total_count_);
+    for(auto i = 0; i < total_count_; ++i) {
+        doc_ids[i] = i;
+    }
 
-    for (size_t i = 0; i < this->total_count_; ++i) {
-        const SparseVector& sv = sparse_ptr[i];
-        for (uint32_t j = 0; j < sv.dim_; ++j) {
-            if (term_max_val_[sv.ids_[j]] < sv.vals_[j]) {
-                term_max_val_[sv.ids_[j]] = sv.vals_[j];
-            }
+    do_kmeans_on_doc_id(sparse_ptr, doc_ids, clusters, cluster_num_, min_cluster_size_, kmeans_iter_);
+
+    // 删除数目为0的簇
+    for (auto it = clusters.begin(); it != clusters.end(); ) {
+        if (it->empty()) {
+            it = clusters.erase(it);
+        } else {
+            ++it;
         }
     }
 
-    cluster_dim_size_ = data_dim_ / cluster_num_;
-    if (data_dim_ % cluster_num_ != 0) {
-        cluster_num_++;
+    cluster_num_ = clusters.size(); 
+
+    // summary方式选取簇心
+    std::vector<std::pair<std::vector<uint32_t>, std::vector<float>>> summary;
+    for (int i = 0; i < clusters.size(); ++i) {
+        std::vector<uint32_t> ids;
+        std::vector<float> vals;
+        energy_preserving_summary(sparse_ptr, ids, vals, clusters[i], summary_energy_);
+        summary.emplace_back(ids, vals);
     }
 
-    clusters.resize(cluster_num_);
-
-    for (auto doc_id = 0; doc_id < total_count_; ++doc_id) {
-        const SparseVector& current_data = sparse_ptr[doc_id];
-
-        std::vector<float> results;
-        compute_ip_with_cluster_centers(results, current_data);
-        auto maxElementIt = std::max_element(results.begin(), results.end());
-        size_t maxIndex = std::distance(results.begin(), maxElementIt);
-        clusters[maxIndex].push_back(doc_id);
-    }
+    summaries = QuantizedSummary(summary, data_dim_);
 }
 
 void
@@ -182,6 +164,7 @@ SparseKmeans::build_cluster_lists(const SparseVector* sparse_ptr,
                                   std::vector<std::vector<uint32_t>>& clusters) {
     this->cluster_lists_ = new ClusterLists[cluster_num_];
 
+//#pragma omp parallel for 
     for (auto cluster_index = 0; cluster_index < cluster_num_; ++cluster_index) {
         auto cluster_doc_num = clusters[cluster_index].size();
         if (cluster_doc_num > max_cluster_doc_num_) {
@@ -266,14 +249,18 @@ SparseKmeans::knn_search(const DatasetPtr& query,
     int num_threads = omp_get_max_threads();
     omp_set_num_threads(num_threads);
     long long search_data_num = 0;
+    long long accumulation_time = 0;
+    long long heap_time = 0;
 
 //#pragma omp parallel for
     for (int i = 0; i < query_num; ++i) {
         auto query_vector = query->GetSparseVectors()[i];
-        this->search_one_query(query_vector, k, ids + i * k, dists + i * k, search_data_num);
+        this->search_one_query(query_vector, k, ids + i * k, dists + i * k, search_data_num, accumulation_time, heap_time);
     }
 
     std::cout << "search_data_num: " << search_data_num / query_num << std::endl;
+    std::cout << "accumulation_time: " << accumulation_time << std::endl;
+    std::cout << "heap_time: " << heap_time << std::endl;
     return std::move(dataset_results);
 }
 
@@ -282,12 +269,13 @@ SparseKmeans::search_one_query(const SparseVector& query_vector,
                                int64_t k,
                                int64_t* res_ids,
                                float* res_dists,
-                               long long &search_data_num) const {
+                               long long &search_data_num,
+                               long long &accumulation_time,
+                               long long &heap_time) const {
     MaxHeap heap(this->allocator_.get());
     auto cur_heap_top = std::numeric_limits<float>::max();
 
-    std::vector<float> results;
-    compute_ip_with_cluster_centers(results, query_vector);
+    std::vector<float> results = summaries.matmul_with_query(query_vector.ids_, query_vector.vals_, query_vector.dim_);
 
     std::vector<size_t> indices(results.size());
     for (size_t i = 0; i < indices.size(); ++i) {
@@ -304,7 +292,7 @@ SparseKmeans::search_one_query(const SparseVector& query_vector,
     for (auto i = 0; i < search_num_; ++i) {
         if(cluster_lists_[indices[i]].doc_num_ != 0) {
             search_data_num += cluster_lists_[indices[i]].doc_num_;
-            search_one_cluster(query_vector, indices[i], dists, k, heap, cur_heap_top);
+            search_one_cluster(query_vector, indices[i], dists, k, heap, cur_heap_top, accumulation_time, heap_time);
         }
     }
 
@@ -321,8 +309,11 @@ SparseKmeans::search_one_cluster(const SparseVector& query_vector,
                                  std::vector<float>& dists,
                                  int64_t k,
                                  MaxHeap& heap,
-                                 float cur_heap_top) const {
+                                 float cur_heap_top,
+                                 long long &accumulation_time,
+                                 long long &heap_time) const {
     ClusterLists& cluster = cluster_lists_[cluster_id];
+    auto start_time_1 = std::chrono::high_resolution_clock::now();
     for (auto term_index = 0; term_index < query_vector.dim_; ++term_index) {
         auto term_id = query_vector.ids_[term_index];
         float query_val = -query_vector.vals_[term_index];
@@ -335,9 +326,12 @@ SparseKmeans::search_one_cluster(const SparseVector& query_vector,
             dists[doc_id] += list.vals_[doc_id_index] * query_val;
         }
     }
+    auto end_time_1 = std::chrono::high_resolution_clock::now();
+    accumulation_time += std::chrono::duration_cast<std::chrono::nanoseconds>(end_time_1 - start_time_1).count();
 
     // 记着dists归零
     // 入堆时按照堆内记录的doc数目入堆
+    auto start_time_2 = std::chrono::high_resolution_clock::now();
     for (auto i = 0; i < cluster.doc_num_; ++i) {
         if (dists[i] >= cur_heap_top) [[likely]] {
             dists[i] = 0;
@@ -351,5 +345,8 @@ SparseKmeans::search_one_cluster(const SparseVector& query_vector,
         cur_heap_top = heap.top().first;
         dists[i] = 0;
     }
+    auto end_time_2 = std::chrono::high_resolution_clock::now();
+    heap_time += std::chrono::duration_cast<std::chrono::nanoseconds>(end_time_2 - start_time_2).count();
+
 }
 }  // namespace vsag

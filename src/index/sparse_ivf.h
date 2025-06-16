@@ -174,13 +174,7 @@ private:
     build_inverted_lists(const std::unordered_map <uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
 
     void
-    build_posting_list(const std::vector<uint32_t>& posting_list, uint32_t dim);
-
-    void
-    do_kmeans_on_doc_id(std::vector<uint32_t> posting_ids, std::vector<std::vector<uint32_t>>& clusters, int n_centroids);
-
-    void
-    energy_preserving_summary(std::vector<uint32_t>& ids, std::vector<float>& vals, std::vector<uint32_t> block, float fraction);
+    build_posting_list(std::vector<uint32_t>& posting_list, uint32_t dim);
 
     DatasetPtr
     knn_search(const DatasetPtr& query,

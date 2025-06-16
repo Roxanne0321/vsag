@@ -24,9 +24,11 @@
 #include "../utils.h"
 #include "common.h"
 #include "safe_allocator.h"
-#include "sparse_kmeans_parameters.h"
 #include "typing.h"
 #include "vsag/index.h"
+#include "sparse_kmeans_parameters.h"
+#include "algorithm/seismic/utils.h"
+#include "algorithm/seismic/summary.h"
 
 namespace vsag {
 class SparseKmeans : public Index {
@@ -160,12 +162,6 @@ private:
     build_cluster_lists(const SparseVector* sparse_ptr,
                         std::vector<std::vector<uint32_t>>& clusters);
 
-    void 
-    compute_ip_with_cluster_centers(std::vector<float> &results, const SparseVector& sv);
-
-    void 
-    compute_ip_with_cluster_centers(std::vector<float> &results, const SparseVector& sv) const;
-
     DatasetPtr
     knn_search(const DatasetPtr& query,
                int64_t k,
@@ -177,7 +173,9 @@ private:
                      int64_t k,
                      int64_t* res_ids,
                      float* res_dists,
-                     long long &search_data_num) const;
+                     long long &search_data_num,
+                     long long &accumulation_time,
+                     long long &heap_time) const;
 
     void
     search_one_cluster(const SparseVector& query_vector,
@@ -185,7 +183,9 @@ private:
                        std::vector<float> &dists,
                        int64_t k,
                        MaxHeap &heap,
-                       float cur_heap_top) const;
+                       float cur_heap_top,
+                       long long &accumulation_time,
+                       long long &heap_time) const;
 
     uint64_t
     cal_serialize_size() const {
@@ -217,9 +217,11 @@ private:
     std::shared_ptr<Allocator> allocator_{nullptr};
 
     uint32_t cluster_num_;
-    uint32_t cluster_dim_size_;
+    uint32_t min_cluster_size_;
+    float summary_energy_;
+    uint32_t kmeans_iter_;
     ClusterLists* cluster_lists_{nullptr};
-    std::vector<float> term_max_val_; // 当做簇心处理
+    QuantizedSummary summaries;
 
     //parameters
     mutable int num_threads_;

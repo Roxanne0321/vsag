@@ -178,7 +178,7 @@ private:
                      std::vector<float> &win_dists) const;
 
     void
-    accumulation_scan(const SparseVector& query_vector,
+    accumulation_scan(std::vector<std::pair<uint32_t, float>>& query_vector,
                  std::vector<float>& dists,
                  //std::vector<std::vector<float>>& product,
                  int64_t k,
@@ -210,13 +210,12 @@ private:
     InvertedList* inverted_lists_{nullptr};
 
     //parameters
-    mutable size_t query_cut_;
+    mutable float query_cut_;
     mutable int num_threads_;
     uint32_t window_size_; //构建存储
     uint32_t window_num_; //构建存储
     DocPruneStrategy doc_prune_strategy_;
     VectorPruneStrategy vector_prune_strategy_;
-    BuildStrategy build_strategy_;
     //mutex
     std::vector<std::mutex> ivf_mutex;
 };

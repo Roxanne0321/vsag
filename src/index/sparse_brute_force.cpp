@@ -16,27 +16,6 @@
 #include <iostream>
 
 namespace vsag {
-static float
-SparseComputeIP(const SparseVector& sv1, const SparseVector& sv2) {
-    float sum = 0.0f;
-    int i = 0, j = 0;
-
-    while (i < sv1.dim_ && j < sv2.dim_) {
-        if (sv1.ids_[i] == sv2.ids_[j]) {
-            sum += sv1.vals_[i] * sv2.vals_[j];
-            i++;
-            j++;
-        } else if (sv1.ids_[i] < sv2.ids_[j]) {
-            // Increment pointer for the first vector
-            i++;
-        } else {
-            // Increment pointer for the second vector
-            j++;
-        }
-    }
-    return -sum;
-}
-
 SparseBF::SparseBF(const SparseBFParameters& param, const IndexCommonParam& index_common_param) {
     allocator_ = index_common_param.allocator_;
 }

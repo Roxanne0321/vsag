@@ -23,7 +23,9 @@ SparseKmeansParameters::FromJson(JsonType& sparse_kmeans_param_obj, IndexCommonP
     SparseKmeansParameters obj;
 
     obj.cluster_num = sparse_kmeans_param_obj[INDEX_CLUSTER_NUM];
-
+    obj.min_cluster_size = sparse_kmeans_param_obj[MIN_CLUSTER_SIZE];
+    obj.summary_energy = sparse_kmeans_param_obj[SUMMARY_ENERGY];
+    obj.kmeans_iter = sparse_kmeans_param_obj[KMEANS_ITER];
     return obj;
 }
 

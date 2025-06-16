@@ -26,6 +26,9 @@ public:
 
 public:
     uint32_t cluster_num{0};
+    uint32_t min_cluster_size{0};
+    float summary_energy{0.0};
+    uint32_t kmeans_iter{1};
 
 protected:
     SparseKmeansParameters() = default;

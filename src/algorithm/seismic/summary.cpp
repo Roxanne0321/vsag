@@ -31,14 +31,59 @@ quantize(float* values, uint32_t dim, size_t n_classes) {
     return std::make_tuple(min_value, quant, query_values);
 }
 
+void
+QuantizedSummary::serialize(std::ostream& out_stream) {
+
+    out_stream.write(reinterpret_cast<const char*>(&n_summaries_), sizeof(n_summaries_));
+    out_stream.write(reinterpret_cast<const char*>(&d_), sizeof(d_));
+    out_stream.write(reinterpret_cast<const char*>(&nnz_), sizeof(nnz_));
+
+    // offsets_ d + 1
+    out_stream.write(reinterpret_cast<const char*>(offsets_.data()),
+                             (d_ + 1) * sizeof(uint32_t));
+    // summaries_ids_ nnz
+    out_stream.write(reinterpret_cast<const char*>(summaries_ids_.data()),
+                             nnz_ * sizeof(uint32_t));
+    // values_ nnz
+    out_stream.write(reinterpret_cast<const char*>(values_.data()),
+                             nnz_ * sizeof(uint8_t));
+    // minimums_ n_summaries_
+    out_stream.write(reinterpret_cast<const char*>(minimums_.data()),
+                             n_summaries_ * sizeof(float));
+    // quants_ n_summaries_
+    out_stream.write(reinterpret_cast<const char*>(quants_.data()),
+                             n_summaries_ * sizeof(float));
+}
+
+void QuantizedSummary::deserialize(std::istream& in_stream) {
+    in_stream.read(reinterpret_cast<char*>(&n_summaries_), sizeof(n_summaries_));
+    in_stream.read(reinterpret_cast<char*>(&d_), sizeof(d_));
+    in_stream.read(reinterpret_cast<char*>(&nnz_), sizeof(nnz_));
+    offsets_.resize(d_ + 1);
+    in_stream.read(reinterpret_cast<char*>(offsets_.data()), (d_ + 1) * sizeof(uint32_t));
+    
+    summaries_ids_.resize(nnz_);
+    in_stream.read(reinterpret_cast<char*>(summaries_ids_.data()), nnz_ * sizeof(uint32_t));
+
+    values_.resize(nnz_);
+    in_stream.read(reinterpret_cast<char*>(values_.data()), nnz_ * sizeof(uint8_t));
+
+    minimums_.resize(n_summaries_);
+    in_stream.read(reinterpret_cast<char*>(minimums_.data()), n_summaries_ * sizeof(float));
+
+    quants_.resize(n_summaries_);
+    in_stream.read(reinterpret_cast<char*>(quants_.data()), n_summaries_ * sizeof(float));
+}
+
+
 QuantizedSummary::QuantizedSummary(
     std::vector<std::pair<std::vector<uint32_t>, std::vector<float>>> dataset,
     uint32_t original_dim) {
     uint32_t num = dataset.size();
-    int nnz = 0;
+    nnz_ = 0;
 
     for (auto vector : dataset) {
-        nnz += vector.first.size();
+        nnz_ += vector.first.size();
     }
 
     std::vector<std::vector<std::pair<uint8_t, uint32_t>>> inverted_pairs(original_dim);
@@ -46,7 +91,6 @@ QuantizedSummary::QuantizedSummary(
     uint32_t n_classes = 256;
 
     for (size_t doc_id = 0; doc_id < num; ++doc_id) {
-        // 获取组件和值，这里需要您自行定义获得组件和值的方法
         auto sv = dataset[doc_id];
 
         auto [minimum, quant, current_codes] =
@@ -73,14 +117,13 @@ QuantizedSummary::QuantizedSummary(
     for (size_t id = 1; id < offsets_.size(); ++id) {
         offsets_[id] += offsets_[id - 1];
     }
-    //assert(offsets_.size() == (original_dim + 1) && "bad offsets summary");
 
     this->n_summaries_ = num;
     this->d_ = original_dim;
 }
 
 std::vector<float>
-QuantizedSummary::matmul_with_query(uint32_t* query_ids, float* query_vals, uint32_t dim) {
+QuantizedSummary::matmul_with_query(uint32_t* query_ids, float* query_vals, uint32_t dim) const {
     std::vector<float> accumulator(n_summaries_, 0.0f);
 
     for (size_t i = 0; i < dim; ++i) {

@@ -33,27 +33,6 @@ PrintSparseVector(const SparseVector& sv) {
     std::cout << std::endl;
 }
 
-static float
-SparseComputeIP(const SparseVector& sv1, const SparseVector& sv2) {
-    float sum = 0.0f;
-    int i = 0, j = 0;
-
-    while (i < sv1.dim_ && j < sv2.dim_) {
-        if (sv1.ids_[i] == sv2.ids_[j]) {
-            sum += sv1.vals_[i] * sv2.vals_[j];
-            i++;
-            j++;
-        } else if (sv1.ids_[i] < sv2.ids_[j]) {
-            // Increment pointer for the first vector
-            i++;
-        } else {
-            // Increment pointer for the second vector
-            j++;
-        }
-    }
-    return -sum;
-}
-
 SparseIVF::SparseIVF(const SparseIVFParameters& param, const IndexCommonParam& index_common_param) {
     doc_prune_strategy_ = param.doc_prune_strategy;
     build_strategy_ = param.build_strategy;
@@ -227,8 +206,7 @@ SparseIVF::build_posting_lists(
 }
 
 void
-SparseIVF::build_posting_list(const std::vector<uint32_t>& posting_ids, uint32_t dim) {
-    //std::cout << "dim " << dim << std::endl;
+SparseIVF::build_posting_list(std::vector<uint32_t>& posting_ids, uint32_t dim) {
     int n_centroids = std::max(1,
                                static_cast<int>(build_strategy_.kmeans.centroid_fraction *
                                                 static_cast<float>(posting_ids.size())));
@@ -239,21 +217,17 @@ SparseIVF::build_posting_list(const std::vector<uint32_t>& posting_ids, uint32_t
     if (n_centroids == 1) {
         clusters[0] = posting_ids;
     } else {
-        do_kmeans_on_doc_id(posting_ids, clusters, n_centroids);
+        do_kmeans_on_doc_id(data_, posting_ids, clusters, n_centroids, build_strategy_.kmeans.min_cluster_size, 1);
     }
 
     block_offsets.emplace_back(0);
-    //std::cout << "cluster size" <<std::endl;
     for (auto cluster : clusters) {
         if (cluster.empty()) {
             continue;
         }
         reordered_posting_ids.insert(reordered_posting_ids.end(), cluster.begin(), cluster.end());
         block_offsets.emplace_back(reordered_posting_ids.size());
-        //std::cout << cluster.size() << " ";
     }
-
-    //std::cout << std::endl;
 
     assert(posting_ids.size() == reordered_posting_ids.size());
     this->posting_lists_[dim].doc_num_ = posting_ids.size();
@@ -276,118 +250,12 @@ SparseIVF::build_posting_list(const std::vector<uint32_t>& posting_ids, uint32_t
         }
         std::vector<uint32_t> ids;
         std::vector<float> vals;
-        energy_preserving_summary(ids, vals, clusters[i], fraction);
+        energy_preserving_summary(data_, ids, vals, clusters[i], fraction);
         summary.emplace_back(ids, vals);
     }
 
     this->posting_lists_[dim].summaries = QuantizedSummary(summary, this->data_dim_);
     this->posting_lists_[dim].num_clusters_ = block_offsets.size() - 1;
-}
-
-void
-SparseIVF::do_kmeans_on_doc_id(std::vector<uint32_t> posting_ids,
-                               std::vector<std::vector<uint32_t>>& clusters,
-                               int n_centroids) {
-    std::vector<uint32_t> centroid_ids(n_centroids);
-
-    //// random choose n centroids
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::shuffle(posting_ids.begin(), posting_ids.end(), gen);
-    centroid_ids.assign(posting_ids.begin(), posting_ids.begin() + n_centroids);
-
-    for (auto doc_id : posting_ids) {
-        SparseVector doc_vector = this->data_[doc_id];
-        int argmin = 0;
-        float min = std::numeric_limits<float>::max();
-
-        for (int i = 0; i < n_centroids; i++) {
-            auto cen_id = centroid_ids[i];
-            SparseVector cen_vector = this->data_[centroid_ids[i]];
-            float dist = SparseComputeIP(doc_vector, cen_vector);
-            if (dist < min) {
-                argmin = i;
-                min = dist;
-            }
-        }
-        clusters[argmin].emplace_back(doc_id);
-    }
-
-    std::vector<uint32_t> to_be_replaced; 
-
-    for (int i = 0; i < n_centroids; i++) {
-        if (clusters[i].size() > 0 &&
-            clusters[i].size() < build_strategy_.kmeans.min_cluster_size) {
-            to_be_replaced.insert(to_be_replaced.end(), clusters[i].begin(), clusters[i].end());
-            clusters[i].clear();
-        }
-    }
-
-    for (auto doc_id : to_be_replaced) {
-        SparseVector doc_vector = this->data_[doc_id];
-        int argmin = 0;
-        float min = std::numeric_limits<float>::max();
-
-        for (int i = 0; i < n_centroids; ++i) {
-            if (clusters[i].empty()) {
-                continue;
-            }
-            SparseVector cen_vector = this->data_[centroid_ids[i]];
-            float dist = SparseComputeIP(doc_vector, cen_vector);
-            if (dist < min) {
-                argmin = i;
-                min = dist;
-            }
-        }
-        clusters[argmin].emplace_back(doc_id);
-    }
-}
-
-void
-SparseIVF::energy_preserving_summary(std::vector<uint32_t>& ids,
-                                     std::vector<float>& vals,
-                                     std::vector<uint32_t> block,
-                                     float fraction) {
-    std::unordered_map<uint32_t, float> hash;
-    for (auto doc_id : block) {
-        SparseVector sv = this->data_[doc_id];
-        for (uint32_t i = 0; i < sv.dim_; ++i) {
-            auto it = hash.find(sv.ids_[i]);
-            if (it != hash.end()) {
-                if (it->second < sv.vals_[i]) {
-                    it->second = sv.vals_[i];
-                }
-            } else {
-                hash[sv.ids_[i]] = sv.vals_[i];
-            }
-        }
-    }
-
-    std::vector<std::pair<uint32_t, float>> components_values(hash.begin(), hash.end());
-
-    std::sort(components_values.begin(), components_values.end(), [](const auto& a, const auto& b) {
-        return b.second < a.second;
-    });
-
-    float total_sum = std::accumulate(
-        components_values.begin(), components_values.end(), 0.0f, [](float sum, const auto& pair) {
-            return sum + static_cast<float>(pair.second);  // Assume T can be casted to float
-        });
-
-    float acc = 0.0f;
-    for (const auto& [tid, v] : components_values) {
-        acc += v;
-        ids.emplace_back(tid);
-        if (acc / total_sum > fraction) {
-            break;
-        }
-    }
-
-    std::sort(ids.begin(), ids.end());
-
-    for (auto tid : ids) {
-        vals.emplace_back(hash[tid]);
-    }
 }
 
 DatasetPtr

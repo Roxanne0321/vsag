@@ -27,7 +27,6 @@ public:
 public:
     DocPruneStrategy doc_prune_strategy;
     VectorPruneStrategy vector_prune_strategy;
-    BuildStrategy build_strategy;
     uint32_t window_size{1};
     
 
@@ -43,7 +42,7 @@ public:
 public:
     // required vars
    int num_threads{1};
-   size_t query_cut{0};
+   float query_cut{0.0};
 
 protected:
     SparseIPIVFSearchParameters() = default;

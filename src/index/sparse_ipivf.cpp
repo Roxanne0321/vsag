@@ -21,7 +21,6 @@ SparseIPIVF::SparseIPIVF(const SparseIPIVFParameters& param,
                          const IndexCommonParam& index_common_param) {
     doc_prune_strategy_ = param.doc_prune_strategy;
     vector_prune_strategy_ = param.vector_prune_strategy;
-    build_strategy_ = param.build_strategy;
     window_size_ = param.window_size;
     allocator_ = index_common_param.allocator_;
 }
@@ -232,12 +231,26 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
                               int64_t* res_ids,
                               float* res_dists,
                               std::vector<float>& win_dists) const {
+    int n = query_vector.dim_ * query_cut_;
+    std::vector<std::pair<uint32_t, float>> elements(query_vector.dim_);
+
+    for (uint32_t i = 0; i < query_vector.dim_; ++i) {
+        elements[i] = {query_vector.ids_[i], query_vector.vals_[i]};
+    }
+
+    std::nth_element(elements.begin(), elements.begin() + n, elements.end(),
+                     [](const std::pair<uint32_t, float>& a, const std::pair<uint32_t, float>& b) {
+                         return a.second > b.second; 
+                     });
+
+    elements.resize(n);
+
     accumulation_scan(
-        query_vector, win_dists, k, res_ids, res_dists);
+        elements, win_dists, k, res_ids, res_dists);
 }
 
 void
-SparseIPIVF::accumulation_scan(const SparseVector& query_vector,
+SparseIPIVF::accumulation_scan(std::vector<std::pair<uint32_t, float>>& query_vector,
                                std::vector<float>& dists,
                                int64_t k,
                                int64_t* res_ids,
@@ -249,9 +262,9 @@ SparseIPIVF::accumulation_scan(const SparseVector& query_vector,
     for (auto window_index = 0; window_index < window_num_; ++window_index) {
         // auto start_time_1 = std::chrono::high_resolution_clock::now();
         uint32_t start = window_index * window_size_;
-        for (auto term_index = 0; term_index < query_vector.dim_; term_index++) {
-            float query_val = -query_vector.vals_[term_index];
-            auto term_id = query_vector.ids_[term_index];
+        for (auto term_index = 0; term_index < query_vector.size(); term_index++) {
+            float query_val = -query_vector[term_index].second;
+            auto term_id = query_vector[term_index].first;
             const InvertedList& list = inverted_lists_[term_id];
             if (list.doc_num_ == 0) [[unlikely]] {
                 continue;
@@ -264,7 +277,7 @@ SparseIPIVF::accumulation_scan(const SparseVector& query_vector,
             }
         }
 
-        for (auto i = 0; i < window_size_; ++i) { // 最后一个window size
+        for (auto i = 0; i < window_size_; ++i) {
             // dists[i + start]入堆
             if (dists[i] >= cur_heap_top) [[likely]] {
                 dists[i] = 0;

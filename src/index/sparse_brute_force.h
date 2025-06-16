@@ -24,6 +24,7 @@
 #include "stream_writer.h"
 #include "sparse_brute_force_parameter.h"
 #include <omp.h>
+#include "algorithm/seismic/utils.h"
 
 namespace vsag{
 

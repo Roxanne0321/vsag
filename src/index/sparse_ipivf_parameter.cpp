@@ -79,31 +79,6 @@ SparseIPIVFParameters::FromJson(JsonType& sparse_ipivf_param_obj, IndexCommonPar
     }
     obj.doc_prune_strategy = prune_strat;
 
-    if (!sparse_ipivf_param_obj.contains(BUILD_STRATEGY)) {
-        throw std::invalid_argument(
-            fmt::format("parameters must contains {}", BUILD_STRATEGY));
-    }
-
-     if (!sparse_ipivf_param_obj[BUILD_STRATEGY].contains(BUILD_TYPE)) {
-        throw std::invalid_argument(
-            fmt::format("parameters must contains {}", BUILD_TYPE));
-    }
-
-    std::string build_type_str = sparse_ipivf_param_obj[BUILD_STRATEGY][BUILD_TYPE];
-    BuildStrategy build_strat;
-
-    if (build_type_str == "NotKmeans") {
-        build_strat.type = BuildStrategyType::NotKmeans;
-    }
-    else if (build_type_str == "Kmeans") {
-        build_strat.type = BuildStrategyType::Kmeans;
-        build_strat.kmeans.centroid_fraction = sparse_ipivf_param_obj[BUILD_STRATEGY][CENTROID_FRACTION];
-        build_strat.kmeans.min_cluster_size = sparse_ipivf_param_obj[BUILD_STRATEGY][MIN_CLUSTER_SIZE];
-        build_strat.kmeans.summary_energy = sparse_ipivf_param_obj[BUILD_STRATEGY][SUMMARY_ENERGY];
-    }
-    
-    obj.build_strategy = build_strat;
-
     return obj;
 }
 
