@@ -99,6 +99,9 @@ SparseIPIVFSearchParameters::FromJson(const std::string& json_string) {
     if (params[INDEX_SPARSE_IPIVF].contains(QUERY_CUT)) {
         obj.query_cut = params[INDEX_SPARSE_IPIVF][QUERY_CUT];
     }
+    if (params[INDEX_SPARSE_IPIVF].contains(REORDER_K)) {
+        obj.reorder_k = params[INDEX_SPARSE_IPIVF][REORDER_K];
+    }
 
     return obj;
 }

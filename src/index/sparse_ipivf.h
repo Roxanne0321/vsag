@@ -47,6 +47,15 @@ public:
             delete[] this->inverted_lists_;
         }
 
+        if (this->data_) {
+            for (auto i = 0; i < total_count_; ++i) {
+                if (data_[i].dim_ != 0) {
+                    delete[] data_[i].ids_;
+                    delete[] data_[i].vals_;
+                }
+            }
+        }
+
         for (auto& lock : ivf_mutex) {
             std::lock_guard<std::mutex> lg(lock);
         }
@@ -164,6 +173,9 @@ private:
     void
     build_inverted_lists(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
 
+    // void
+    // store_residual(const SparseVector* sparse_ptr, std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
+
     DatasetPtr
     knn_search(const DatasetPtr& query,
                int64_t k,
@@ -179,11 +191,15 @@ private:
 
     void
     accumulation_scan(std::vector<std::pair<uint32_t, float>>& query_vector,
-                 std::vector<float>& dists,
-                 //std::vector<std::vector<float>>& product,
-                 int64_t k,
-                 int64_t* res_ids,
-                 float* res_dists) const;
+                      MaxHeap &heap,
+                      std::vector<float>& dists) const;
+    
+    void
+    reorder(const SparseVector& residual_query,
+                     MaxHeap &heap,
+                     int64_t k,
+                     int64_t* res_ids,
+                     float* res_dists) const;
 
     uint64_t
     cal_serialize_size() const {
@@ -204,16 +220,19 @@ private:
         uint32_t* offsets_{nullptr};
     };
 
-    uint32_t data_dim_{0}; //构建存储
-    uint32_t total_count_{0}; //构建存储
+    SparseVector* data_;
+
+    uint32_t data_dim_{0};
+    uint32_t total_count_{0};
     std::shared_ptr<Allocator> allocator_{nullptr};
     InvertedList* inverted_lists_{nullptr};
 
     //parameters
     mutable float query_cut_;
     mutable int num_threads_;
-    uint32_t window_size_; //构建存储
-    uint32_t window_num_; //构建存储
+    mutable int reorder_k_;
+    uint32_t window_size_;
+    uint32_t window_num_; 
     DocPruneStrategy doc_prune_strategy_;
     VectorPruneStrategy vector_prune_strategy_;
     //mutex

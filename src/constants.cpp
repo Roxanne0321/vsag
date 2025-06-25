@@ -146,5 +146,6 @@ const char* const INDEX_CLUSTER_NUM = "cluster_num";
 const char* const INDEX_SEARCH_NUM = "search_num";
 const char* const WINDOW_SIZE = "window_size";
 const char* const KMEANS_ITER = "kmeans_iter";
+const char* const REORDER_K = "reorder_k";
 
 };  // namespace vsag

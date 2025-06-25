@@ -43,6 +43,7 @@ public:
     // required vars
    int num_threads{1};
    float query_cut{0.0};
+   int reorder_k{0};
 
 protected:
     SparseIPIVFSearchParameters() = default;

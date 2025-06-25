@@ -91,10 +91,8 @@ SparseComputeIP(const SparseVector& sv1, const SparseVector& sv2) {
             i++;
             j++;
         } else if (sv1.ids_[i] < sv2.ids_[j]) {
-            // Increment pointer for the first vector
             i++;
         } else {
-            // Increment pointer for the second vector
             j++;
         }
     }
