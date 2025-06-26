@@ -24,6 +24,9 @@ global_pruning(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, floa
 float
 SparseComputeIP(const SparseVector& sv1, const SparseVector& sv2);
 
+float 
+DenseComputeIP(const std::vector<float> &query, const SparseVector& base);
+
 void
 do_kmeans_on_doc_id(const SparseVector* data,
                     std::vector<uint32_t>& doc_ids,

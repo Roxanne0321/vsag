@@ -99,6 +99,29 @@ SparseComputeIP(const SparseVector& sv1, const SparseVector& sv2) {
     return -sum;
 }
 
+float DenseComputeIP(const std::vector<float> &query, const SparseVector& base) {
+    const size_t N_LANES = 4;
+    float result[N_LANES] = {0.0, 0.0, 0.0, 0.0};
+    
+    // 处理完整的N_LANES块
+    size_t full_blocks = base.dim_ / N_LANES;
+    
+    for (size_t i = 0; i < full_blocks * N_LANES; i += N_LANES) {
+        result[0] += query[base.ids_[i]] * base.vals_[i];
+        result[1] += query[base.ids_[i + 1]] * base.vals_[i + 1];
+        result[2] += query[base.ids_[i + 2]] * base.vals_[i + 2];
+        result[3] += query[base.ids_[i + 3]] * base.vals_[i + 3];
+    }
+
+    // 处理剩余部分
+    for (size_t i = full_blocks * N_LANES; i < base.dim_; ++i) {
+        result[0] += query[base.ids_[i]] * base.vals_[i];
+    }
+
+    // 汇总结果
+    return - (result[0] + result[1] + result[2] + result[3]);
+}
+
 // 该函数没有删除数目为零的簇
 void
 initialize_kmeans(const SparseVector* data,

@@ -313,9 +313,12 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
                               std::vector<float>& win_dists) const {
     int n = query_vector.dim_ * query_cut_;
     std::vector<std::pair<uint32_t, float>> elements(query_vector.dim_);
+    std::vector<float> query_dense(data_dim_);
 
     for (uint32_t i = 0; i < query_vector.dim_; ++i) {
         elements[i] = {query_vector.ids_[i], query_vector.vals_[i]};
+        query_dense[query_vector.ids_[i]] = query_vector.vals_[i];
+
     }
 
     std::nth_element(elements.begin(),
@@ -332,7 +335,7 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
     accumulation_scan(elements, heap, win_dists);
 
     // 重排
-    reorder(query_vector, heap, k, res_ids, res_dists);
+    reorder(query_dense, heap, k, res_ids, res_dists);
 }
 
 void
@@ -401,7 +404,7 @@ SparseIPIVF::accumulation_scan(std::vector<std::pair<uint32_t, float>>& query_ve
 }
 
 void
-SparseIPIVF::reorder(const SparseVector& query_vector,
+SparseIPIVF::reorder(const std::vector<float> &query_dense,
                               MaxHeap &heap,
                               int64_t k,
                               int64_t* res_ids,
@@ -414,7 +417,7 @@ SparseIPIVF::reorder(const SparseVector& query_vector,
 
         const SparseVector& base_vector = data_[doc_id];
         
-        float dist = SparseComputeIP(base_vector, query_vector);
+        float dist = DenseComputeIP(query_dense, base_vector);
 
         if (dist < cur_heap_top or final_heap.size() < k) {
             final_heap.emplace(dist, doc_id);

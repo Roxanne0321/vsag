@@ -195,7 +195,7 @@ private:
                       std::vector<float>& dists) const;
     
     void
-    reorder(const SparseVector& residual_query,
+    reorder(const std::vector<float> &query_dense,
                      MaxHeap &heap,
                      int64_t k,
                      int64_t* res_ids,
