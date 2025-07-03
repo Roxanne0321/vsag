@@ -11,7 +11,7 @@
 namespace vsag {
 
 std::vector<uint32_t>
-get_top_n_indices(const SparseVector& vec, uint32_t n);
+get_top_n_indices(const SparseVector& vec, float n_cut);
 
 void
 fixed_pruning(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map,

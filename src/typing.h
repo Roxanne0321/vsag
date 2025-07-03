@@ -65,7 +65,7 @@ enum class VectorPruneStrategyType {
     VectorPrune
 };
 struct VectorPrune {
-    int n_cut;
+    float n_cut;
 };
 
 struct VectorPruneStrategy {

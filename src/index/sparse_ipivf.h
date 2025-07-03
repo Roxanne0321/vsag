@@ -173,9 +173,6 @@ private:
     void
     build_inverted_lists(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
 
-    // void
-    // store_residual(const SparseVector* sparse_ptr, std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
-
     DatasetPtr
     knn_search(const DatasetPtr& query,
                int64_t k,

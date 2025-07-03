@@ -152,11 +152,11 @@ SparseIPIVF::vector_prune(
     const SparseVector* sparse_ptr,
     std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map) {
     if (vector_prune_strategy_.type == VectorPruneStrategyType::VectorPrune) {
-        int n_cut = vector_prune_strategy_.vectorPrune.n_cut;
+        float n_cut = vector_prune_strategy_.vectorPrune.n_cut;
         for (size_t i = 0; i < this->total_count_; ++i) {
             const SparseVector& sv = sparse_ptr[i];
             std::vector<uint32_t> top_n_indices = get_top_n_indices(sv, n_cut);
-            for (auto j = 0; j < std::min(n_cut, static_cast<int>(sv.dim_)); j++) {
+            for (auto j = 0; j < top_n_indices.size(); j++) {
                 uint32_t word_id = sv.ids_[top_n_indices[j]];
                 float val = sv.vals_[top_n_indices[j]];
                 word_map[word_id].emplace_back(i, val);
@@ -189,45 +189,6 @@ SparseIPIVF::list_prune(
                       this->data_dim_);
     }
 }
-
-// void
-// SparseIPIVF::store_residual (const SparseVector* sparse_ptr,
-//                              std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map) {
-//     // 方案一：用一个vector<map>存储word map的向量形式
-//     std::vector<std::unordered_map<uint32_t, float>> part_vector(total_count_);
-
-//     for (const auto& list : word_map) {
-//         auto term_id = list.first;
-//         for (const auto& pair : list.second) {
-//             part_vector[pair.first][term_id] = pair.second;
-//         }
-//     }
-
-//     residual_data_ = new SparseVector[this->total_count_];
-
-//     // 要考虑到剪枝后dim为0的点 在做距离计算时会不会出错
-//     // 将sparse_ptr中不在part_vector中的值存到residual_data中，省去id升序排序
-//     for (auto doc_id = 0; doc_id < total_count_; ++doc_id) {
-//         const SparseVector& base = sparse_ptr[doc_id];
-//         residual_data_[doc_id].dim_ = base.dim_ - part_vector[doc_id].size();
-
-//         if (residual_data_[doc_id].dim_ != 0) {
-//             residual_data_[doc_id].ids_ = new uint32_t[residual_data_[doc_id].dim_];
-//             residual_data_[doc_id].vals_ = new float[residual_data_[doc_id].dim_];
-
-//             const auto& pv = part_vector[doc_id];
-//             auto residual_term_index = 0;
-//             for (auto term_index = 0; term_index < base.dim_; ++term_index) {
-//                 uint32_t term_id = base.ids_[term_index];
-//                 if (pv.find(term_id) == pv.end()) {  // 没找到则存入残差向量中
-//                     residual_data_[doc_id].ids_[residual_term_index] = term_id;
-//                     residual_data_[doc_id].vals_[residual_term_index] = base.vals_[term_index];
-//                     ++residual_term_index;
-//                 }
-//             }
-//         }
-//     }
-// }
 
 void
 SparseIPIVF::build_inverted_lists(
@@ -360,21 +321,6 @@ SparseIPIVF::accumulation_scan(std::vector<std::pair<uint32_t, float>>& query_ve
                 dists[doc_id - start] += list.vals_[doc_id_index] * query_val;
             }
         }
-
-        // for (auto i = 0; i < window_size_; ++i) {
-        //     // dists[i + start]入堆
-        //     if (dists[i] >= cur_heap_top) [[likely]] {
-        //         dists[i] = 0;
-        //         continue;
-        //     } else {
-        //         heap.emplace(dists[i], i + start);
-        //     }
-        //     if (heap.size() > reorder_k_) {
-        //         heap.pop();
-        //     }
-        //     cur_heap_top = heap.top().first;
-        //     dists[i] = 0;
-        // }
 
         for (auto term_index = 0; term_index < query_vector.size(); term_index++) {
             auto term_id = query_vector[term_index].first;

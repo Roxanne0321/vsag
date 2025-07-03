@@ -2,19 +2,28 @@
 
 namespace vsag {
 std::vector<uint32_t>
-get_top_n_indices(const SparseVector& vec, uint32_t n) {
+get_top_n_indices(const SparseVector& vec, float n_cut) {
+    float total_mass = 0.0f;
     std::vector<uint32_t> indices(vec.dim_);
     for (uint32_t i = 0; i < vec.dim_; ++i) {
         indices[i] = i;
-    }
-    if (n >= vec.dim_) {
-        return indices;
+        total_mass += vec.vals_[i];
     }
 
-    std::nth_element(
-        indices.begin(), indices.begin() + n, indices.end(), [&](uint32_t a, uint32_t b) {
+    std::sort(
+        indices.begin(), indices.end(), [&](uint32_t a, uint32_t b) {
             return vec.vals_[a] > vec.vals_[b];
         });
+
+    float part_mass = total_mass * n_cut;
+    float temp_mass = 0.0f;
+    int max_index = 0;
+    while(temp_mass < part_mass) {
+        temp_mass += vec.vals_[indices[max_index]];
+        max_index ++;
+    }
+
+    indices.resize(max_index);
 
     return indices;
 }
