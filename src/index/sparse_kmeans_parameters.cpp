@@ -22,10 +22,88 @@ SparseKmeansParameters
 SparseKmeansParameters::FromJson(JsonType& sparse_kmeans_param_obj, IndexCommonParam index_common_param) {
     SparseKmeansParameters obj;
 
-    obj.cluster_num = sparse_kmeans_param_obj[INDEX_CLUSTER_NUM];
-    obj.min_cluster_size = sparse_kmeans_param_obj[MIN_CLUSTER_SIZE];
-    obj.summary_energy = sparse_kmeans_param_obj[SUMMARY_ENERGY];
-    obj.kmeans_iter = sparse_kmeans_param_obj[KMEANS_ITER];
+    if (!sparse_kmeans_param_obj.contains(VECTOR_PRUNE_STRATEGY)) {
+        throw std::invalid_argument(
+            fmt::format("parameters must contains {}", VECTOR_PRUNE_STRATEGY));
+    }
+
+     if (!sparse_kmeans_param_obj[VECTOR_PRUNE_STRATEGY].contains(PRUNE_TYPE)) {
+        throw std::invalid_argument(
+            fmt::format("parameters must contains {}", PRUNE_TYPE));
+    }
+
+    std::string vector_prune_type_str = sparse_kmeans_param_obj[VECTOR_PRUNE_STRATEGY][PRUNE_TYPE];
+    VectorPruneStrategy vector_prune_strat;
+
+    if (vector_prune_type_str == "NotPrune") {
+        vector_prune_strat.type = VectorPruneStrategyType::NotPrune;
+    }
+    else if (vector_prune_type_str == "VectorPrune") {
+        vector_prune_strat.type = VectorPruneStrategyType::VectorPrune;
+        vector_prune_strat.vectorPrune.n_cut = sparse_kmeans_param_obj[VECTOR_PRUNE_STRATEGY][NCUT];
+    }
+
+    obj.vector_prune_strategy = vector_prune_strat;
+
+    if (!sparse_kmeans_param_obj.contains(LIST_PRUNE_STRATEGY)) {
+        throw std::invalid_argument(
+            fmt::format("parameters must contains {}", LIST_PRUNE_STRATEGY));
+    }
+
+     if (!sparse_kmeans_param_obj[LIST_PRUNE_STRATEGY].contains(PRUNE_TYPE)) {
+        throw std::invalid_argument(
+            fmt::format("parameters must contains {}", PRUNE_TYPE));
+    }
+
+    std::string prune_type_str = sparse_kmeans_param_obj[LIST_PRUNE_STRATEGY][PRUNE_TYPE];
+    ListPruneStrategy prune_strat;
+
+    if (prune_type_str == "NotPrune") {
+        prune_strat.type = ListPruneStrategyType::NotPrune;
+    } 
+    else if (prune_type_str == "FixedSize") {
+        prune_strat.type = ListPruneStrategyType::FixedSize;
+        prune_strat.parameters.fixedSize.n_postings = sparse_kmeans_param_obj[LIST_PRUNE_STRATEGY][POSTING_LISTS];
+    } 
+    else if (prune_type_str == "GlobalPrune") {
+        prune_strat.type = ListPruneStrategyType::GlobalPrune;
+        prune_strat.parameters.globalPrune.n_postings = sparse_kmeans_param_obj[LIST_PRUNE_STRATEGY][POSTING_LISTS];
+        prune_strat.parameters.globalPrune.fraction = sparse_kmeans_param_obj[LIST_PRUNE_STRATEGY][MAX_FRACTION];
+    } 
+    else {
+        throw std::invalid_argument("Unknown strategy type");
+    }
+    obj.list_prune_strategy = prune_strat;
+
+    if (!sparse_kmeans_param_obj.contains(BUILD_STRATEGY)) {
+        throw std::invalid_argument(
+            fmt::format("parameters must contains {}", BUILD_STRATEGY));
+    }
+
+    if (!sparse_kmeans_param_obj[BUILD_STRATEGY].contains(BUILD_TYPE)) {
+        throw std::invalid_argument(
+            fmt::format("parameters must contains {}", BUILD_TYPE));
+    }
+
+    std::string build_type_str = sparse_kmeans_param_obj[BUILD_STRATEGY][BUILD_TYPE];
+    BuildStrategy build_strat;
+
+    if (build_type_str == "NotKmeans") {
+        build_strat.type = BuildStrategyType::NotKmeans;
+    }
+    else if (build_type_str == "Kmeans") {
+        build_strat.type = BuildStrategyType::Kmeans;
+        build_strat.kmeans.centroid_fraction = sparse_kmeans_param_obj[BUILD_STRATEGY][CENTROID_FRACTION];
+        build_strat.kmeans.min_cluster_size = sparse_kmeans_param_obj[BUILD_STRATEGY][MIN_CLUSTER_SIZE];
+        build_strat.kmeans.summary_energy = sparse_kmeans_param_obj[BUILD_STRATEGY][SUMMARY_ENERGY];
+    }
+    
+    obj.build_strategy = build_strat;
+
+    if(sparse_kmeans_param_obj.contains(WINDOW_SIZE)){
+        obj.window_size = sparse_kmeans_param_obj[WINDOW_SIZE];
+    }
+
     return obj;
 }
 
@@ -35,7 +113,11 @@ SparseKmeansSearchParameters::FromJson(const std::string& json_string) {
 
     SparseKmeansSearchParameters obj;
 
-   obj.search_num = params[INDEX_SPARSE_KMEANS][INDEX_SEARCH_NUM];
+    obj.query_cut = params[INDEX_SPARSE_KMEANS][QUERY_CUT];
+    obj.num_threads = params[INDEX_SPARSE_KMEANS][SPARSE_NUM_THREADS];
+    obj.reorder_k = params[INDEX_SPARSE_KMEANS][REORDER_K];
+    obj.heap_factor = params[INDEX_SPARSE_KMEANS][HEAP_FACTOR];
+
     return obj;
 }
 }  // namespace vsag

@@ -57,12 +57,12 @@ int main(int argc, char** argv) {
 
     std::string dataset = "base_1M"; // Provide default values
     int window_size = 50000;
-    float n_cut = 0.95;
+    int64_t topk = 10;
 
     struct option long_options[] = {
         {"dataset", required_argument, 0, 'd'},
         {"window_size", required_argument, 0, 'w'},
-        {"n_cut", required_argument, 0, 'n'},
+        {"topk", required_argument, 0, 't'},
         {0, 0, 0, 0}
     };
 
@@ -75,18 +75,17 @@ int main(int argc, char** argv) {
             case 'w':
                 window_size = std::stoi(optarg);
                 break;
-            case 'n':
-                n_cut = std::stoi(optarg);
+            case 't':
+                topk = std::stoll(optarg);
                 break;
             default:
-                std::cerr << "Usage: " << argv[0] << " [--dataset <dataset>] [--window_size <window_size>] [--n_cut <n_cut>]" << std::endl;
+                std::cerr << "Usage: " << argv[0] << " [--dataset <dataset>] [--window_size <window_size>] [--topk <topk>]" << std::endl;
                 return 1;
         }
     }
 
     std::cout << "dataset: " << dataset << std::endl;
     std::cout << "window_size: " << window_size << std::endl;
-    std::cout << "n_cut: " << n_cut << std::endl;
 
     std::string basefile = "sparse/data/" + dataset + ".csr";
     std::pair<vsag::SparseVector*, int64_t> base_results = read_sparse_vectors_from_csr_file(basefile);
@@ -99,10 +98,10 @@ int main(int argc, char** argv) {
         {"metric_type", "ip"},
         {"dim", 30000},
         {"sparse_ipivf",
-         {{"reorder_type", "Reorder"},
+         {{"reorder_type", "NotReorder"},
           {"window_size", window_size},
           {"list_prune_strategy", {{"prune_type", "NotPrune"}}},
-          {"vector_prune_strategy", {{"prune_type", "VectorPrune"}, {"n_cut", n_cut}}}}}};
+          {"vector_prune_strategy", {{"prune_type", "NotPrune"}}}}}};
 
     auto index =
         vsag::Factory::CreateIndex("sparse_ipivf", sparse_ipivf_build_parameters.dump()).value();
@@ -115,15 +114,36 @@ int main(int argc, char** argv) {
         exit(-1);
     }
 
-    std::string index_path = "sparse/index/" + dataset + "_ws_" + std::to_string(window_size) +
-                             "_nc_0" + std::to_string(int(n_cut * 100)) + ".idx";
-    std::ofstream index_file(index_path, std::ios::binary);
+    std::string queryfile = "sparse/data/queries.dev.csr";
+    std::pair<vsag::SparseVector*, int64_t> query_results =
+        read_sparse_vectors_from_csr_file(queryfile);
 
-    if (!index_file) {
-        std::cerr << "Error opening file for serialization." << std::endl;
-        return 1;
-    }
-    index->Serialize(index_file);
+    auto query = vsag::Dataset::Make();
+    query->SparseVectors(query_results.first)->NumElements(query_results.second)->Owner(true);
+
+    std::cout << "topk: " << topk << std::endl;
+
+    nlohmann::json sparse_ipivf_search_parameters = {
+        {"sparse_ipivf",
+         {{"num_threads", 1}}}};
+    auto start_time = high_resolution_clock::now();
+
+    auto result =
+        index->KnnSearch(query, topk, sparse_ipivf_search_parameters.dump()).value();
+
+    auto end_time = high_resolution_clock::now();
+    auto duration = duration_cast<nanoseconds>(end_time - start_time).count();
+
+    float qps = static_cast<float>(query_results.second) / (duration * 1.0e-9);
+    std::cout << "qps: " << qps << std::endl;
+
+    std::string file_name = "sparse/results/" + dataset + "_top" + std::to_string(topk) + ".pkl";
+    std::ofstream out(file_name, std::ios::binary);
+
+    out.write(reinterpret_cast<const char*>(&query_results.second), sizeof(int64_t));
+    out.write(reinterpret_cast<const char*>(&topk), sizeof(int64_t));
+    out.write(reinterpret_cast<const char*>(result->GetIds()), sizeof(int64_t) * topk * query_results.second);
+    out.write(reinterpret_cast<const char*>(result->GetDistances()), sizeof(float) * topk * query_results.second);
 
     return 0;
 }

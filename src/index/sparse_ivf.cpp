@@ -34,7 +34,7 @@ PrintSparseVector(const SparseVector& sv) {
 }
 
 SparseIVF::SparseIVF(const SparseIVFParameters& param, const IndexCommonParam& index_common_param) {
-    doc_prune_strategy_ = param.doc_prune_strategy;
+    list_prune_strategy_ = param.list_prune_strategy;
     build_strategy_ = param.build_strategy;
     vector_prune_strategy_ = param.vector_prune_strategy;
     ivf_size_file_ = param.ivf_size_file;
@@ -124,13 +124,13 @@ SparseIVF::build(const DatasetPtr& base) {
         }
     }
 
-    if (doc_prune_strategy_.type == DocPruneStrategyType::FixedSize) {
-        fixed_pruning(word_map, doc_prune_strategy_.parameters.fixedSize.n_postings, this->data_dim_);
-    } else if (doc_prune_strategy_.type == DocPruneStrategyType::GlobalPrune) {
-        global_pruning(word_map, doc_prune_strategy_.parameters.globalPrune.n_postings, this->data_dim_);
+    if (list_prune_strategy_.type == ListPruneStrategyType::FixedSize) {
+        fixed_pruning(word_map, list_prune_strategy_.parameters.fixedSize.n_postings, this->data_dim_);
+    } else if (list_prune_strategy_.type == ListPruneStrategyType::GlobalPrune) {
+        global_pruning(word_map, list_prune_strategy_.parameters.globalPrune.n_postings, this->data_dim_);
         fixed_pruning(word_map,
-                      doc_prune_strategy_.parameters.globalPrune.n_postings *
-                          doc_prune_strategy_.parameters.globalPrune.fraction, this->data_dim_);
+                      list_prune_strategy_.parameters.globalPrune.n_postings *
+                          list_prune_strategy_.parameters.globalPrune.fraction, this->data_dim_);
     }
 
     unique_dim_ = word_map.size();
@@ -217,7 +217,7 @@ SparseIVF::build_posting_list(std::vector<uint32_t>& posting_ids, uint32_t dim) 
     if (n_centroids == 1) {
         clusters[0] = posting_ids;
     } else {
-        do_kmeans_on_doc_id(data_, posting_ids, clusters, n_centroids, build_strategy_.kmeans.min_cluster_size, 1);
+        // do_kmeans_on_doc_id(data_, posting_ids, clusters, n_centroids, build_strategy_.kmeans.min_cluster_size);
     }
 
     block_offsets.emplace_back(0);

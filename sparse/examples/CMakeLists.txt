@@ -3,3 +3,6 @@ target_link_libraries(sparse_index_build vsag)
 
 add_executable(sparse_index_search sparse_index_search.cpp)
 target_link_libraries(sparse_index_search vsag)
+
+add_executable(full_precision_build_search full_precision_build_search.cpp)
+target_link_libraries(full_precision_build_search vsag)

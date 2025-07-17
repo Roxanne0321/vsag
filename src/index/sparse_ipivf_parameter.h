@@ -25,8 +25,9 @@ public:
     FromJson(JsonType& sparse_ipivf_param_obj, IndexCommonParam index_common_param);
 
 public:
-    DocPruneStrategy doc_prune_strategy;
+    ListPruneStrategy list_prune_strategy;
     VectorPruneStrategy vector_prune_strategy;
+    ReorderType reorder_type;
     uint32_t window_size{1};
     
 

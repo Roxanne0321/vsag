@@ -130,11 +130,6 @@ QuantizedSummary::matmul_with_query(uint32_t* query_ids, float* query_vals, uint
         uint32_t qc = query_ids[i];
         float qv = query_vals[i];
 
-        if(qc > offsets_.size()) {
-            std::cout << "qc: " << qc << " offsets size: " << offsets_.size() << " dim: " << d_ <<std::endl;
-        }
-        assert(qc < offsets_.size() && "wrong query term id");
-
         auto current_offset = offsets_[qc];
         auto next_offset = offsets_[qc + 1];
         if (next_offset - current_offset == 0)

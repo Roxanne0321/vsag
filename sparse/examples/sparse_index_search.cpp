@@ -56,12 +56,12 @@ int main(int argc, char** argv) {
     vsag::init();
 
     // Define default parameter values
-    std::string dataset = "1M";
-    int window_size = 100000;
-    int n_cut = 40;
+    std::string dataset = "base_1M";
+    int window_size = 50000;
+    float n_cut = 0.95;
     int64_t topk = 10;
-    float query_cut = 0.2f;
-    int reorder_k = 300;
+    float query_cut = 1.0f;
+    int reorder_k = 3500;
 
     // Define long options for command line arguments
     struct option long_options[] = {
@@ -121,15 +121,16 @@ int main(int argc, char** argv) {
         {"metric_type", "ip"},
         {"dim", 30000},
         {"sparse_ipivf",
-         {{"window_size", window_size},
-          {"doc_prune_strategy", {{"prune_type", "NotPrune"}}},
-          {"vector_prune_strategy", {{"prune_type", "NotPrune"}, {"n_cut", n_cut}}}}}};
+         {{"reorder_type", "Reorder"},
+          {"window_size", window_size},
+          {"list_prune_strategy", {{"prune_type", "NotPrune"}}},
+          {"vector_prune_strategy", {{"prune_type", "VectorPrune"}, {"n_cut", n_cut}}}}}};
 
     auto index =
         vsag::Factory::CreateIndex("sparse_ipivf", sparse_ipivf_build_parameters.dump()).value();
 
-    std::string index_path = "sparse/index/" + dataset + "_ws_" +
-                             std::to_string(window_size) + "_nc_" + std::to_string(n_cut) + ".idx";
+    std::string index_path = "sparse/index/" + dataset + "_ws_" + std::to_string(window_size) +
+                             "_nc_0" + std::to_string(int(n_cut * 100)) + ".idx";
     std::ifstream index_file(index_path, std::ios::binary);
 
     if (!index_file) {
@@ -164,7 +165,7 @@ int main(int argc, char** argv) {
     std::cout << "qps: " << qps << std::endl;
 
     std::string file_name = "sparse/results/" + dataset +
-                            "_nc_" + std::to_string(n_cut) + "_qc_" + std::to_string(int(query_cut * 100)) +
+                            "_nc_" + std::to_string(int(n_cut * 100)) + "_qc_" + std::to_string(int(query_cut * 100)) +
                             "_rk_" + std::to_string(reorder_k) + "_top" + std::to_string(topk) + ".pkl";
     std::ofstream out(file_name, std::ios::binary);
 

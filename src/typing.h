@@ -73,7 +73,7 @@ struct VectorPruneStrategy {
     VectorPrune vectorPrune;
 };
 
-enum class DocPruneStrategyType {
+enum class ListPruneStrategyType {
     NotPrune,
     FixedSize,
     GlobalPrune
@@ -88,8 +88,8 @@ struct GlobalPrune {
     float fraction;
 };
 
-struct DocPruneStrategy {
-    DocPruneStrategyType type;
+struct ListPruneStrategy {
+    ListPruneStrategyType type;
     union {
         FixedSize fixedSize;
         GlobalPrune globalPrune;
@@ -111,4 +111,10 @@ struct BuildStrategy {
     BuildStrategyType type;
     Kmeans kmeans;
 };
+
+enum class ReorderType {
+    NotReorder,
+    Reorder
+};
+
 }  // namespace vsag

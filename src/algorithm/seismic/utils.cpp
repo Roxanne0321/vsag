@@ -1,6 +1,52 @@
 #include "algorithm/seismic/utils.h"
 
 namespace vsag {
+void
+vector_prune(VectorPruneStrategy vector_prune_strategy,
+             const SparseVector* data,
+             uint32_t num,
+             std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map) {
+
+    if (vector_prune_strategy.type == VectorPruneStrategyType::VectorPrune) {
+        float n_cut = vector_prune_strategy.vectorPrune.n_cut;
+        for (auto doc_id = 0; doc_id < num; ++doc_id) {
+            const SparseVector& sv = data[doc_id];
+            std::vector<uint32_t> top_n_indices = get_top_n_indices(sv, n_cut);
+            for (auto j = 0; j < top_n_indices.size(); j++) {
+                uint32_t word_id = sv.ids_[top_n_indices[j]];
+                float val = sv.vals_[top_n_indices[j]];
+                word_map[word_id].emplace_back(doc_id, val);
+            }
+        }
+    } else if (vector_prune_strategy.type == VectorPruneStrategyType::NotPrune) {
+        for (auto doc_id = 0; doc_id < num; ++doc_id) {
+            const SparseVector& sv = data[doc_id];
+            for (uint32_t j = 0; j < sv.dim_; ++j) {
+                uint32_t word_id = sv.ids_[j];
+                float val = sv.vals_[j];
+                word_map[word_id].emplace_back(doc_id, val);
+            }
+        }
+    }
+}
+
+void
+list_prune(ListPruneStrategy list_prune_strategy, 
+           uint32_t dim,
+           std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map) {
+    if (list_prune_strategy.type == ListPruneStrategyType::FixedSize) {
+        fixed_pruning(
+            word_map, list_prune_strategy.parameters.fixedSize.n_postings, dim);
+    } else if (list_prune_strategy.type == ListPruneStrategyType::GlobalPrune) {
+        global_pruning(
+            word_map, list_prune_strategy.parameters.globalPrune.n_postings, dim);
+        fixed_pruning(word_map,
+                      list_prune_strategy.parameters.globalPrune.n_postings *
+                          list_prune_strategy.parameters.globalPrune.fraction,
+                      dim);
+    }
+}
+
 std::vector<uint32_t>
 get_top_n_indices(const SparseVector& vec, float n_cut) {
     float total_mass = 0.0f;
@@ -131,22 +177,31 @@ float DenseComputeIP(const std::vector<float> &query, const SparseVector& base) 
     return - (result[0] + result[1] + result[2] + result[3]);
 }
 
-// 该函数没有删除数目为零的簇
 void
-initialize_kmeans(const SparseVector* data,
-                  std::vector<uint32_t>& doc_ids,
-                  std::vector<std::vector<uint32_t>>& clusters,
-                  uint32_t n_centroids,
-                  uint32_t min_cluster_size) {
-    std::vector<uint32_t> centroid_ids(n_centroids);
-    // random choose n centroids
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::shuffle(doc_ids.begin(), doc_ids.end(), gen);
-    centroid_ids.assign(doc_ids.begin(), doc_ids.begin() + n_centroids);
+do_kmeans_on_doc_id(const SparseVector* data,
+                    const std::vector<std::pair<uint32_t, float>> &postings_ids_vals,
+                    std::vector<std::vector<std::pair<uint32_t, float>>>& clusters,
+                    uint32_t n_centroids,
+                    uint32_t min_cluster_size) {
+    std::vector<uint32_t> doc_ids(postings_ids_vals.size());
+    for (auto i = 0; i < postings_ids_vals.size(); ++i) {
+        doc_ids[i] = postings_ids_vals[i].first;
+    }
+    std::sort(doc_ids.begin(), doc_ids.end());
 
-#pragma omp parallel for
-    for (auto doc_id : doc_ids) {
+    std::vector<uint32_t> centroid_ids(n_centroids);
+    for (auto i = 0; i < n_centroids; ++i) {
+        centroid_ids[i] = doc_ids[i];
+    }
+
+    // // random choose n centroids
+    // std::random_device rd;
+    // std::mt19937 gen(rd());
+    // std::shuffle(doc_ids.begin(), doc_ids.end(), gen);
+    // centroid_ids.assign(doc_ids.begin(), doc_ids.begin() + n_centroids);
+
+    for (auto id_val : postings_ids_vals) {
+        auto doc_id = id_val.first;
         SparseVector doc_vector = data[doc_id];
         int argmin = 0;
         float min = std::numeric_limits<float>::max();
@@ -160,13 +215,10 @@ initialize_kmeans(const SparseVector* data,
                 min = dist;
             }
         }
-#pragma omp critical
-        {
-            clusters[argmin].emplace_back(doc_id);
-        }
+        clusters[argmin].emplace_back(id_val);
     }
 
-    std::vector<uint32_t> to_be_replaced;
+    std::vector<std::pair<uint32_t, float>> to_be_replaced;
 
     for (int i = 0; i < n_centroids; i++) {
         if (clusters[i].size() > 0 && clusters[i].size() < min_cluster_size) {
@@ -175,7 +227,8 @@ initialize_kmeans(const SparseVector* data,
         }
     }
 
-    for (auto doc_id : to_be_replaced) {
+    for (auto id_val : to_be_replaced) {
+        auto doc_id = id_val.first;
         SparseVector doc_vector = data[doc_id];
         int argmin = 0;
         float min = std::numeric_limits<float>::max();
@@ -191,127 +244,7 @@ initialize_kmeans(const SparseVector* data,
                 min = dist;
             }
         }
-        clusters[argmin].emplace_back(doc_id);
-    }
-}
-
-void
-update_cluster_centers(const SparseVector* data,
-                       std::vector<std::vector<uint32_t>>& clusters,
-                       std::vector<uint32_t>& centroids_ids,
-                       uint32_t n_centroids) {
-    for (auto cluster_id = 0; cluster_id < n_centroids; ++cluster_id) {
-        const auto& cluster = clusters[cluster_id];
-        SparseVector mean_vector;
-        std::unordered_map<uint32_t, std::pair<uint32_t, float>>
-            dim_sums;  // 存储每个维度取值累加和，以及取值个数
-
-        for (auto doc_id : cluster) {
-            SparseVector sv = data[doc_id];
-            for (auto i = 0; i < sv.dim_; ++i) {
-                dim_sums[sv.ids_[i]].second += sv.vals_[i];
-                dim_sums[sv.ids_[i]].first++;
-            }
-        }
-
-        //如果迭代时间太长可以采用截断
-        std::vector<std::pair<uint32_t, float>> sorted_dim_sums;
-        sorted_dim_sums.reserve(dim_sums.size());
-        for (const auto& [dimension, value_count_sum] : dim_sums) {
-            uint32_t count = value_count_sum.first;
-            float sum = value_count_sum.second;
-            float average = sum / static_cast<float>(count);
-            sorted_dim_sums.emplace_back(dimension, average);
-        }
-
-        std::sort(sorted_dim_sums.begin(),
-                  sorted_dim_sums.end(),
-                  [](const std::pair<uint32_t, float>& a, const std::pair<uint32_t, float>& b) {
-                      return a.first < b.first;
-                  });
-
-        mean_vector.dim_ = dim_sums.size();
-        mean_vector.ids_ = new uint32_t[dim_sums.size()];
-        mean_vector.vals_ = new float[dim_sums.size()];
-
-        for (auto i = 0; i < dim_sums.size(); ++i) {
-            mean_vector.ids_[i] = sorted_dim_sums[i].first;
-            mean_vector.vals_[i] = sorted_dim_sums[i].second;
-        }
-
-        float min_distance = std::numeric_limits<float>::max();
-        uint32_t best_doc_id = 0;
-
-        // 选择和均值向量内积最大的数据点作为簇心
-        for (auto doc_id : cluster) {
-            SparseVector sv = data[doc_id];
-            float distance = SparseComputeIP(sv, mean_vector);
-            if (distance < min_distance) {
-                min_distance = distance;
-                best_doc_id = doc_id;
-            }
-        }
-        centroids_ids[cluster_id] = best_doc_id;
-        std::cout << "best doc id: " << best_doc_id << std::endl;
-    }
-}
-
-void
-do_kmeans_on_doc_id(const SparseVector* data,
-                    std::vector<uint32_t>& doc_ids,
-                    std::vector<std::vector<uint32_t>>& clusters,
-                    uint32_t n_centroids,
-                    uint32_t min_cluster_size,
-                    uint32_t k) {
-    std::vector<uint32_t> centroid_ids(n_centroids);
-
-    initialize_kmeans(data, doc_ids, clusters, n_centroids, min_cluster_size);
-
-    for (auto iter = 1; iter < k; ++iter) {
-        update_cluster_centers(data, clusters, centroid_ids, n_centroids);
-        for(auto cluster_id = 0; cluster_id < n_centroids; ++cluster_id) {
-            // std::cout << "centroid id: " << centroid_ids[cluster_id] << std::endl;
-            clusters[cluster_id].clear();
-        }
-#pragma omp parallel for
-        for (auto doc_id : doc_ids) {
-            SparseVector doc_vector = data[doc_id];
-            int argmin = 0;
-            float min = std::numeric_limits<float>::max();
-
-            for (int i = 0; i < n_centroids; i++) {
-                auto cen_id = centroid_ids[i];
-                SparseVector cen_vector = data[centroid_ids[i]];
-                float dist = SparseComputeIP(doc_vector, cen_vector);
-                if (dist < min) {
-                    argmin = i;
-                    min = dist;
-                }
-            }
-#pragma omp critical
-            {
-                clusters[argmin].emplace_back(doc_id);
-            }
-        }
-    }
-}
-
-void
-random_kmeans(const SparseVector* data,
-              std::vector<uint32_t>& doc_ids,
-              std::vector<std::vector<uint32_t>>& clusters,
-              uint32_t n_centroids,
-              uint32_t min_cluster_size) {
-    std::vector<uint32_t> centroid_ids(n_centroids);
-
-    //// random choose n centroids
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::shuffle(doc_ids.begin(), doc_ids.end(), gen);
-    centroid_ids.assign(doc_ids.begin(), doc_ids.begin() + n_centroids);
-
-    for (size_t i = 0; i < doc_ids.size(); ++i) {
-        clusters[i % n_centroids].push_back(doc_ids[i]);
+        clusters[argmin].emplace_back(id_val);
     }
 }
 

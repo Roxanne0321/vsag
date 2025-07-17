@@ -7,8 +7,19 @@
 #include <iostream>
 
 #include "vsag/dataset.h"
+#include "typing.h"
 
 namespace vsag {
+void
+vector_prune(VectorPruneStrategy vector_prune_strategy,
+             const SparseVector* data,
+             uint32_t num,
+             std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
+
+void
+list_prune(ListPruneStrategy list_prune_strategy, 
+           uint32_t dim,
+           std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
 
 std::vector<uint32_t>
 get_top_n_indices(const SparseVector& vec, float n_cut);
@@ -29,31 +40,10 @@ DenseComputeIP(const std::vector<float> &query, const SparseVector& base);
 
 void
 do_kmeans_on_doc_id(const SparseVector* data,
-                    std::vector<uint32_t>& doc_ids,
-                    std::vector<std::vector<uint32_t>>& clusters,
+                    const std::vector<std::pair<uint32_t, float>> &postings_ids_vals,
+                    std::vector<std::vector<std::pair<uint32_t, float>>>& clusters,
                     uint32_t n_centroids,
-                    uint32_t min_cluster_size,
-                    uint32_t k);
-
-void
-initialize_kmeans(const SparseVector* data,
-                  std::vector<uint32_t>& doc_ids,
-                  std::vector<std::vector<uint32_t>>& clusters,
-                  uint32_t n_centroids,
-                  uint32_t min_cluster_size);
-
-void
-update_cluster_centers(const SparseVector* data,
-                        std::vector<std::vector<uint32_t>>& clusters,
-                        std::vector<uint32_t>& centroids_ids,
-                        uint32_t n_centroids);
-
-void
-random_kmeans(const SparseVector* data,
-              std::vector<uint32_t> doc_ids,
-              std::vector<std::vector<uint32_t>>& clusters,
-              uint32_t n_centroids,
-              uint32_t min_cluster_size);
+                    uint32_t min_cluster_size);
 
 void
 energy_preserving_summary(const SparseVector* data,

@@ -19,73 +19,64 @@
 namespace vsag {
 tl::expected<void, Error>
 SparseKmeans::serialize(std::ostream& out_stream) {
-    // total_count
-    out_stream.write(reinterpret_cast<const char*>(&total_count_), sizeof(total_count_));
-    // data_dim
-    out_stream.write(reinterpret_cast<const char*>(&data_dim_), sizeof(data_dim_));
-    // max_cluster_doc_num
-    out_stream.write(reinterpret_cast<const char*>(&max_cluster_doc_num_),
-                     sizeof(max_cluster_doc_num_));
-    // cluster_num
-    out_stream.write(reinterpret_cast<const char*>(&cluster_num_), sizeof(cluster_num_));
+    out_stream.write(reinterpret_cast<const char*>(&total_count_), sizeof(uint32_t));
+    out_stream.write(reinterpret_cast<const char*>(&data_dim_), sizeof(uint32_t));
+    out_stream.write(reinterpret_cast<const char*>(&window_num_), sizeof(uint32_t));
 
-    summaries.serialize(out_stream);
+    for (auto dim_index = 0; dim_index < data_dim_; ++dim_index) {
+        out_stream.write(reinterpret_cast<const char*>(&list_summaries_[dim_index].n_centroids_),
+                         sizeof(uint32_t));
+        if (list_summaries_[dim_index].n_centroids_ != 0) {
+            list_summaries_[dim_index].summaries.serialize(out_stream);
+        }
+    }
 
-    for (auto cluster_index = 0; cluster_index < cluster_num_; cluster_index++) {
-        const ClusterLists& cluster = cluster_lists_[cluster_index];
-        out_stream.write(reinterpret_cast<const char*>(&cluster.doc_num_),
-                         sizeof(cluster.doc_num_));
-        if (cluster.doc_num_ > 0) {
-            out_stream.write(reinterpret_cast<const char*>(cluster.doc_ids_.data()),
-                             cluster.doc_num_ * sizeof(uint32_t));
-            for (auto term_index = 0; term_index < data_dim_; ++term_index) {
-                const InvertedList& list = cluster.inverted_lists_[term_index];
-                out_stream.write(reinterpret_cast<const char*>(&list.doc_num_),
-                                 sizeof(list.doc_num_));
+    for (auto window_index = 0; window_index < window_num_; ++window_index) {
+        auto& window = window_lists_[window_index];
 
-                if (list.doc_num_ > 0) {
-                    out_stream.write(reinterpret_cast<const char*>(list.ids_),
-                                     list.doc_num_ * sizeof(uint32_t));
-                    out_stream.write(reinterpret_cast<const char*>(list.vals_),
-                                     list.doc_num_ * sizeof(float));
-                }
+        for (auto dim_index = 0; dim_index < data_dim_; ++dim_index) {
+            auto n_cen = list_summaries_[dim_index].n_centroids_;
+            if (n_cen != 0) {
+                window[dim_index].serialize(out_stream, n_cen);
             }
         }
     }
+
     return {};
 }
 
 tl::expected<void, Error>
 SparseKmeans::deserialize(std::istream& in_stream) {
-    in_stream.read(reinterpret_cast<char*>(&total_count_), sizeof(total_count_));
-    in_stream.read(reinterpret_cast<char*>(&data_dim_), sizeof(data_dim_));
-    in_stream.read(reinterpret_cast<char*>(&max_cluster_doc_num_), sizeof(max_cluster_doc_num_));
-    in_stream.read(reinterpret_cast<char*>(&cluster_num_), sizeof(cluster_num_));
+    in_stream.read(reinterpret_cast<char*>(&total_count_), sizeof(uint32_t));
+    std::cout << "total_count_: " << total_count_ << "\n";
 
-    summaries.deserialize(in_stream);
+    in_stream.read(reinterpret_cast<char*>(&data_dim_), sizeof(uint32_t));
+    std::cout << "data_dim_: " << data_dim_ << "\n";
 
-    cluster_lists_ = new ClusterLists[cluster_num_];
+    in_stream.read(reinterpret_cast<char*>(&window_num_), sizeof(uint32_t));
+    std::cout << "window_num_: " << window_num_ << "\n";
 
-    for (auto cluster_index = 0; cluster_index < cluster_num_; cluster_index++) {
-        ClusterLists& cluster = cluster_lists_[cluster_index];
-        in_stream.read(reinterpret_cast<char*>(&cluster.doc_num_), sizeof(cluster.doc_num_));
-        if (cluster.doc_num_ > 0) {
-            cluster.doc_ids_.resize(cluster.doc_num_);
-            in_stream.read(reinterpret_cast<char*>(cluster.doc_ids_.data()),
-                           cluster.doc_num_ * sizeof(uint32_t));
-            cluster.inverted_lists_ = new InvertedList[data_dim_];
-            for (auto term_index = 0; term_index < data_dim_; ++term_index) {
-                InvertedList& list = cluster.inverted_lists_[term_index];
-                in_stream.read(reinterpret_cast<char*>(&list.doc_num_), sizeof(list.doc_num_));
+    list_summaries_.resize(data_dim_);
 
-                if (list.doc_num_ > 0) {
-                    list.ids_ = new uint32_t[list.doc_num_];
-                    list.vals_ = new float[list.doc_num_];
-                    in_stream.read(reinterpret_cast<char*>(list.ids_),
-                                   list.doc_num_ * sizeof(uint32_t));
-                    in_stream.read(reinterpret_cast<char*>(list.vals_),
-                                   list.doc_num_ * sizeof(float));
-                }
+    for (auto dim_index = 0; dim_index < data_dim_; ++dim_index) {
+        in_stream.read(reinterpret_cast<char*>(&list_summaries_[dim_index].n_centroids_),
+                       sizeof(uint32_t));
+        if (list_summaries_[dim_index].n_centroids_ != 0) {
+            list_summaries_[dim_index].summaries.deserialize(in_stream);
+        }
+    }
+
+    window_lists_.resize(window_num_);
+
+    for (auto window_index = 0; window_index < window_num_; ++window_index) {
+        auto& window = window_lists_[window_index];
+
+        window.resize(data_dim_);
+        for (auto dim_index = 0; dim_index < data_dim_; ++dim_index) {
+            auto n_cen = list_summaries_[dim_index].n_centroids_;
+            std::cout << "window[" << window_index << "].posting_lists_[" << dim_index << "]:\n";
+            if (n_cen != 0) {
+                window[dim_index].deserialize(in_stream, n_cen);
             }
         }
     }
@@ -95,133 +86,154 @@ SparseKmeans::deserialize(std::istream& in_stream) {
 
 SparseKmeans::SparseKmeans(const SparseKmeansParameters& param,
                            const IndexCommonParam& index_common_param) {
-    this->cluster_num_ = param.cluster_num;
-    this->min_cluster_size_ = param.min_cluster_size;
-    this->summary_energy_ = param.summary_energy;
-    this->kmeans_iter_ = param.kmeans_iter;
+    vector_prune_strategy_ = param.vector_prune_strategy;
+    list_prune_strategy_ = param.list_prune_strategy;
+    build_strategy_ = param.build_strategy;
+    window_size_ = param.window_size;
     allocator_ = index_common_param.allocator_;
 }
 
 std::vector<int64_t>
 SparseKmeans::build(const DatasetPtr& base) {
+    this->data_dim_ = 0;
+    //// copy base dataset
     const SparseVector* sparse_ptr = base->GetSparseVectors();
     this->total_count_ = base->GetNumElements();
-    std::vector<std::vector<uint32_t>> clusters(cluster_num_);
+    this->data_ = new SparseVector[this->total_count_];
+    for (size_t i = 0; i < this->total_count_; ++i) {
+        const SparseVector& sv = sparse_ptr[i];
+        for (uint32_t j = 1; j < sv.dim_; ++j) {
+            assert(sv.ids_[j - 1] <= sv.ids_[j] && "IDs are not in ascending order");
+        }
 
-    int num_threads = omp_get_max_threads();
-    omp_set_num_threads(num_threads);
-    
-    partition_into_clusters(sparse_ptr, clusters);
-    build_cluster_lists(sparse_ptr, clusters);
+        if (sv.ids_[sv.dim_ - 1] > this->data_dim_) {
+            this->data_dim_ = sv.ids_[sv.dim_ - 1];
+        }
+
+        this->data_[i].dim_ = sv.dim_;
+        this->data_[i].ids_ = new uint32_t[this->data_[i].dim_];
+        this->data_[i].vals_ = new float[this->data_[i].dim_];
+        memcpy(this->data_[i].ids_, sv.ids_, this->data_[i].dim_ * sizeof(uint32_t));
+        memcpy(this->data_[i].vals_, sv.vals_, this->data_[i].dim_ * sizeof(float));
+    }
+
+    this->data_dim_ += 1;
+
+    ivf_mutex = std::vector<std::mutex>(this->data_dim_);
+
+    std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>
+        word_map;  // 存储剪枝后的doc_id对应的val
+
+    vector_prune(vector_prune_strategy_, data_, total_count_, word_map);
+
+    list_prune(list_prune_strategy_, data_dim_, word_map);
+
+    build_window_lists(word_map);
     return {};
 }
 
 void
-SparseKmeans::partition_into_clusters(const SparseVector* sparse_ptr,
-                                      std::vector<std::vector<uint32_t>>& clusters) {
-    this->data_dim_ = 0;
-    for (size_t i = 0; i < this->total_count_; ++i) {
-        const SparseVector& sv = sparse_ptr[i];
-        if (sv.ids_[sv.dim_ - 1] > this->data_dim_) {
-            this->data_dim_ = sv.ids_[sv.dim_ - 1];
+SparseKmeans::build_window_lists(
+    std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map) {
+    window_num_ = total_count_ / window_size_ + ((total_count_ % window_size_ == 0) ? 0 : 1);
+    window_lists_.resize(window_num_);
+
+    // 初始化每个window下的posting_list
+    for (auto window_index = 0; window_index < window_num_; ++window_index) {
+        window_lists_[window_index].resize(data_dim_);
+    }
+
+    // 初始化list_summaries
+    list_summaries_.resize(data_dim_);
+
+    int min_cluster_size = build_strategy_.kmeans.min_cluster_size;
+    float summary_energy = build_strategy_.kmeans.summary_energy;
+
+#pragma omp parallel for
+    for (auto i = 0; i < data_dim_; ++i) {
+        if (i % 1000 == 0) {
+            std::cout << "dim: " << i << std::endl;
         }
-    }
+        auto it = word_map.find(i);
+        if (it != word_map.end()) {
+            auto dim = i;
+            std::lock_guard<std::mutex> lock(ivf_mutex[i]);
 
-    data_dim_ += 1;
-
-    std::vector<uint32_t> doc_ids(total_count_);
-    for(auto i = 0; i < total_count_; ++i) {
-        doc_ids[i] = i;
-    }
-
-    do_kmeans_on_doc_id(sparse_ptr, doc_ids, clusters, cluster_num_, min_cluster_size_, kmeans_iter_);
-
-    // 删除数目为0的簇
-    for (auto it = clusters.begin(); it != clusters.end(); ) {
-        if (it->empty()) {
-            it = clusters.erase(it);
-        } else {
-            ++it;
-        }
-    }
-
-    cluster_num_ = clusters.size(); 
-
-    // summary方式选取簇心
-    std::vector<std::pair<std::vector<uint32_t>, std::vector<float>>> summary;
-    for (int i = 0; i < clusters.size(); ++i) {
-        std::vector<uint32_t> ids;
-        std::vector<float> vals;
-        energy_preserving_summary(sparse_ptr, ids, vals, clusters[i], summary_energy_);
-        summary.emplace_back(ids, vals);
-    }
-
-    summaries = QuantizedSummary(summary, data_dim_);
-}
-
-void
-SparseKmeans::build_cluster_lists(const SparseVector* sparse_ptr,
-                                  std::vector<std::vector<uint32_t>>& clusters) {
-    this->cluster_lists_ = new ClusterLists[cluster_num_];
-
-//#pragma omp parallel for 
-    for (auto cluster_index = 0; cluster_index < cluster_num_; ++cluster_index) {
-        auto cluster_doc_num = clusters[cluster_index].size();
-        if (cluster_doc_num > max_cluster_doc_num_) {
-            max_cluster_doc_num_ = cluster_doc_num;
-        }
-        ClusterLists& cluster = this->cluster_lists_[cluster_index];
-        cluster.doc_num_ = cluster_doc_num;
-        std::cout << "cluster.doc_num_: " << cluster.doc_num_ << std::endl;
-        cluster.doc_ids_.resize(cluster_doc_num);
-
-        // 为每个簇构建word_map
-        std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>> word_map;
-        for (auto doc_index = 0; doc_index < cluster_doc_num; ++doc_index) {
-            auto doc_id = clusters[cluster_index][doc_index];
-            const SparseVector& sv = sparse_ptr[doc_id];
-            for (uint32_t j = 0; j < sv.dim_; ++j) {
-                uint32_t word_id = sv.ids_[j];
-                float val = sv.vals_[j];
-                word_map[word_id].emplace_back(doc_id, val);
+            auto id_val_list = it->second;
+            int n_centroids = std::max(1,
+                                       static_cast<int>(build_strategy_.kmeans.centroid_fraction *
+                                                        static_cast<float>(id_val_list.size())));
+            std::vector<std::vector<std::pair<uint32_t, float>>> clusters(n_centroids);
+            if (n_centroids == 1) {
+                clusters[0] = id_val_list;
+            } else {
+                do_kmeans_on_doc_id(data_, id_val_list, clusters, n_centroids, min_cluster_size);
             }
-        }
 
-        // 为每个word_map实现reallocate，用map实现，检查key是否存在，不存在则顺延
-        std::unordered_map<uint32_t, uint32_t> doc_id_mapping;  // 原始到新的 doc_id 映射
-        uint32_t next_id = 0;                                   // 当前分配的下一个新 doc_id
+            std::vector<std::vector<std::vector<std::pair<uint32_t, float>>>> window_clusters(
+                window_num_);  //第一维代表窗口 第二维代表第几个cluster
+            std::vector<std::pair<std::vector<uint32_t>, std::vector<float>>> summary;
 
-        for (auto& [term_id, doc_list] : word_map) {
-            for (auto& [original_doc_id, value] : doc_list) {
-                if (doc_id_mapping.find(original_doc_id) == doc_id_mapping.end()) {
-                    // 如果原始 doc_id 尚未分配，则分配一个新的 doc_id
-                    doc_id_mapping[original_doc_id] = next_id;
-                    cluster.doc_ids_[next_id] = original_doc_id;
-                    ++next_id;
+            int real_centroids = 0;  //非空cluster数目
+            for (auto cluster : clusters) {
+                if (!cluster.empty()) {
+                    // if (dim == 100) {
+                    //     std::cout << "cluster index: " << real_centroids << std::endl;
+                    //     for (auto pair : cluster) {
+                    //         std::cout << pair.first << " ";
+                    //     }
+                    //     std::cout << std::endl;
+                    // }
+                    real_centroids++;
+
+                    std::vector<uint32_t> ids;
+                    std::vector<float> vals;
+                    std::vector<uint32_t> block_ids(cluster.size());
+                    for (auto i = 0; i < cluster.size(); ++i) {
+                        block_ids[i] = cluster[i].first;
+                    }
+                    energy_preserving_summary(data_, ids, vals, block_ids, summary_energy);
+                    summary.emplace_back(ids, vals);
                 }
-                // 替换成新的 doc_id
-                original_doc_id = doc_id_mapping[original_doc_id];
             }
-        }
 
-        // 为每个cluster list构建倒排列表
-        cluster.inverted_lists_ = new InvertedList[this->data_dim_];
-        for (uint32_t i = 0; i < this->data_dim_; ++i) {
-            auto it = word_map.find(i);
-            if (it != word_map.end()) {
-                auto& doc_infos = it->second;
-                std::sort(doc_infos.begin(),
-                          doc_infos.end(),
-                          [](const std::pair<uint32_t, float>& a,
-                             const std::pair<uint32_t, float>& b) { return a.first < b.first; });
-                uint32_t doc_num = static_cast<uint32_t>(doc_infos.size());
-                cluster.inverted_lists_[i].doc_num_ = doc_num;
-                cluster.inverted_lists_[i].ids_ = new uint32_t[doc_num];
-                cluster.inverted_lists_[i].vals_ = new float[doc_num];
-                for (uint32_t j = 0; j < doc_num; j++) {
-                    cluster.inverted_lists_[i].ids_[j] = doc_infos[j].first;
-                    cluster.inverted_lists_[i].vals_[j] = doc_infos[j].second;
+            list_summaries_[dim].n_centroids_ = real_centroids;
+            list_summaries_[dim].summaries = QuantizedSummary(summary, data_dim_);
+
+            // 每个窗口都有相同的簇数目 如果某窗口的某簇内没有分到值，则个数为0
+            for (auto window_index = 0; window_index < window_num_; ++window_index) {
+                window_clusters[window_index].resize(real_centroids);
+            }
+
+            int cluster_index = 0;
+            for (auto cluster : clusters) {
+                if (cluster.size() != 0) {
+                    for (auto id_val : cluster) {
+                        auto window_index = id_val.first / window_size_;
+                        window_clusters[window_index][cluster_index].emplace_back(id_val);
+                    }
+
+                    cluster_index++;
                 }
+            }
+
+            // if (dim == 100) {
+            //     for (auto window_index = 0; window_index < window_num_; ++window_index) {
+            //         std::cout << "window_index: " << window_index << std::endl;
+            //         for (auto cluster_index = 0; cluster_index < real_centroids; ++cluster_index) {
+            //             std::cout << "cluster_index: " << cluster_index << std::endl;
+            //             for (auto pair : window_clusters[window_index][cluster_index]) {
+            //                 std::cout << pair.first << " ";
+            //             }
+            //             std::cout << std::endl;
+            //         }
+            //     }
+            // }
+
+            // 对每个window下对应维度的posting list进行构建：提取该窗口下的clusters，构建PostingList
+            for (auto window_index = 0; window_index < window_num_; ++window_index) {
+                auto& cur_window = window_lists_[window_index];
+                cur_window[dim] = PostingList(window_clusters[window_index]);
             }
         }
     }
@@ -234,7 +246,6 @@ SparseKmeans::knn_search(const DatasetPtr& query,
                          const std::function<bool(int64_t)>& filter) const {
     auto params = SparseKmeansSearchParameters::FromJson(parameters);
     this->num_threads_ = params.num_threads;
-    this->search_num_ = params.search_num;
 
     uint32_t query_num = query->GetNumElements();
     auto dataset_results = Dataset::Make();
@@ -244,23 +255,14 @@ SparseKmeans::knn_search(const DatasetPtr& query,
     auto* dists = (float*)allocator_->Allocate(sizeof(float) * query_num * k);
     dataset_results->Distances(dists);
 
-    uint32_t dist_cmp = 0;
-
     int num_threads = omp_get_max_threads();
     omp_set_num_threads(num_threads);
-    long long search_data_num = 0;
-    long long accumulation_time = 0;
-    long long heap_time = 0;
 
-//#pragma omp parallel for
+    //#pragma omp parallel for
     for (int i = 0; i < query_num; ++i) {
         auto query_vector = query->GetSparseVectors()[i];
-        this->search_one_query(query_vector, k, ids + i * k, dists + i * k, search_data_num, accumulation_time, heap_time);
+        this->search_one_query(query_vector, k, ids + i * k, dists + i * k);
     }
-
-    std::cout << "search_data_num: " << search_data_num / query_num << std::endl;
-    std::cout << "accumulation_time: " << accumulation_time << std::endl;
-    std::cout << "heap_time: " << heap_time << std::endl;
     return std::move(dataset_results);
 }
 
@@ -268,85 +270,6 @@ void
 SparseKmeans::search_one_query(const SparseVector& query_vector,
                                int64_t k,
                                int64_t* res_ids,
-                               float* res_dists,
-                               long long &search_data_num,
-                               long long &accumulation_time,
-                               long long &heap_time) const {
-    MaxHeap heap(this->allocator_.get());
-    auto cur_heap_top = std::numeric_limits<float>::max();
-
-    std::vector<float> results = summaries.matmul_with_query(query_vector.ids_, query_vector.vals_, query_vector.dim_);
-
-    std::vector<size_t> indices(results.size());
-    for (size_t i = 0; i < indices.size(); ++i) {
-        indices[i] = i;
-    }
-
-    std::nth_element(indices.begin(),
-                     indices.begin() + search_num_,
-                     indices.end(),
-                     [&results](size_t a, size_t b) { return results[a] > results[b]; });
-
-    std::vector<float> dists(max_cluster_doc_num_, 0.0);
-
-    for (auto i = 0; i < search_num_; ++i) {
-        if(cluster_lists_[indices[i]].doc_num_ != 0) {
-            search_data_num += cluster_lists_[indices[i]].doc_num_;
-            search_one_cluster(query_vector, indices[i], dists, k, heap, cur_heap_top, accumulation_time, heap_time);
-        }
-    }
-
-    for (auto j = static_cast<int64_t>(heap.size() - 1); j >= 0; --j) {
-        res_dists[j] = heap.top().first;
-        res_ids[j] = heap.top().second;
-        heap.pop();
-    }
-}
-
-void
-SparseKmeans::search_one_cluster(const SparseVector& query_vector,
-                                 uint32_t cluster_id,
-                                 std::vector<float>& dists,
-                                 int64_t k,
-                                 MaxHeap& heap,
-                                 float cur_heap_top,
-                                 long long &accumulation_time,
-                                 long long &heap_time) const {
-    ClusterLists& cluster = cluster_lists_[cluster_id];
-    auto start_time_1 = std::chrono::high_resolution_clock::now();
-    for (auto term_index = 0; term_index < query_vector.dim_; ++term_index) {
-        auto term_id = query_vector.ids_[term_index];
-        float query_val = -query_vector.vals_[term_index];
-        const InvertedList& list = cluster.inverted_lists_[term_id];
-        if (list.doc_num_ == 0) [[unlikely]] {
-            continue;
-        }
-        for (auto doc_id_index = 0; doc_id_index < list.doc_num_; ++doc_id_index) {
-            auto doc_id = list.ids_[doc_id_index];
-            dists[doc_id] += list.vals_[doc_id_index] * query_val;
-        }
-    }
-    auto end_time_1 = std::chrono::high_resolution_clock::now();
-    accumulation_time += std::chrono::duration_cast<std::chrono::nanoseconds>(end_time_1 - start_time_1).count();
-
-    // 记着dists归零
-    // 入堆时按照堆内记录的doc数目入堆
-    auto start_time_2 = std::chrono::high_resolution_clock::now();
-    for (auto i = 0; i < cluster.doc_num_; ++i) {
-        if (dists[i] >= cur_heap_top) [[likely]] {
-            dists[i] = 0;
-            continue;
-        } else {
-            heap.emplace(dists[i], cluster.doc_ids_[i]);
-        }
-        if (heap.size() > k) {
-            heap.pop();
-        }
-        cur_heap_top = heap.top().first;
-        dists[i] = 0;
-    }
-    auto end_time_2 = std::chrono::high_resolution_clock::now();
-    heap_time += std::chrono::duration_cast<std::chrono::nanoseconds>(end_time_2 - start_time_2).count();
-
+                               float* res_dists) const {
 }
 }  // namespace vsag

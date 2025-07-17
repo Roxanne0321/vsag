@@ -164,11 +164,10 @@ private:
     build(const DatasetPtr& data);
 
     void
-    vector_prune(const SparseVector* sparse_ptr, 
-                 std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
+    reorder_build(const DatasetPtr& data);
 
     void
-    list_prune(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
+    not_reorder_build(const DatasetPtr& data); // 没有任何裁剪
 
     void
     build_inverted_lists(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
@@ -180,11 +179,18 @@ private:
                const std::function<bool(int64_t)>& filter) const;
 
     void
-    search_one_query(const SparseVector& query_vector,
+    reorder_search_one_query(const SparseVector& query_vector,
                      int64_t k,
                      int64_t* res_ids,
                      float* res_dists,
                      std::vector<float> &win_dists) const;
+    
+    void
+    not_reorder_search_one_query(const SparseVector& query_vector,
+                     int64_t k,
+                     int64_t* res_ids,
+                     float* res_dists,
+                     std::vector<float> &win_dists) const; // 没有裁剪和重排
 
     void
     accumulation_scan(std::vector<std::pair<uint32_t, float>>& query_vector,
@@ -217,7 +223,7 @@ private:
         uint32_t* offsets_{nullptr};
     };
 
-    SparseVector* data_;
+    SparseVector* data_{nullptr};
 
     uint32_t data_dim_{0};
     uint32_t total_count_{0};
@@ -225,12 +231,13 @@ private:
     InvertedList* inverted_lists_{nullptr};
 
     //parameters
+    ReorderType reorder_type_;
     mutable float query_cut_;
     mutable int num_threads_;
     mutable int reorder_k_;
     uint32_t window_size_;
     uint32_t window_num_; 
-    DocPruneStrategy doc_prune_strategy_;
+    ListPruneStrategy list_prune_strategy_;
     VectorPruneStrategy vector_prune_strategy_;
     //mutex
     std::vector<std::mutex> ivf_mutex;

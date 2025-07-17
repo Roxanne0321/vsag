@@ -145,7 +145,7 @@ private:
                const std::function<bool(int64_t)>& filter) const;
 
     void search_one_query(const SparseVector& query_vector, int64_t k, 
-                          int64_t* res_ids, float* res_dists, uint32_t& dist_cmp) const;
+                          int64_t* res_ids, float* res_dists) const;
 
     uint64_t
     cal_serialize_size() const {

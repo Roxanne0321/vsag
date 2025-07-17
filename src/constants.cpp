@@ -130,7 +130,7 @@ const char* const BRUTE_FORCE_IO_TYPE = "io_type";
 // sparse params
 const char* const SPARSE_NUM_THREADS = "num_threads";
 const char* const QUERY_CUT = "query_cut";
-const char* const DOC_PRUNE_STRATEGY = "doc_prune_strategy";
+const char* const LIST_PRUNE_STRATEGY = "list_prune_strategy";
 const char* const PRUNE_TYPE = "prune_type";
 const char* const POSTING_LISTS = "num_postings";
 const char* const MAX_FRACTION = "max_fraction";
@@ -147,5 +147,6 @@ const char* const INDEX_SEARCH_NUM = "search_num";
 const char* const WINDOW_SIZE = "window_size";
 const char* const KMEANS_ITER = "kmeans_iter";
 const char* const REORDER_K = "reorder_k";
+const char* const REORDER_TYPE = "reorder_type";
 
 };  // namespace vsag

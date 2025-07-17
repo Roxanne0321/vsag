@@ -25,10 +25,10 @@ public:
     FromJson(JsonType& sparse_kmeans_param_obj, IndexCommonParam index_common_param);
 
 public:
-    uint32_t cluster_num{0};
-    uint32_t min_cluster_size{0};
-    float summary_energy{0.0};
-    uint32_t kmeans_iter{1};
+    uint32_t window_size;
+    ListPruneStrategy list_prune_strategy;
+    VectorPruneStrategy vector_prune_strategy;
+    BuildStrategy build_strategy;
 
 protected:
     SparseKmeansParameters() = default;
@@ -40,9 +40,10 @@ public:
     FromJson(const std::string& json_string);
 
 public:
-    // required vars
-   int num_threads{1};
-   uint32_t search_num{0};
+    float query_cut;
+    int num_threads;
+    int reorder_k;
+    float heap_factor;
 
 protected:
     SparseKmeansSearchParameters() = default;

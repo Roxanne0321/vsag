@@ -19,9 +19,10 @@
 namespace vsag {
 SparseIPIVF::SparseIPIVF(const SparseIPIVFParameters& param,
                          const IndexCommonParam& index_common_param) {
-    doc_prune_strategy_ = param.doc_prune_strategy;
+    list_prune_strategy_ = param.list_prune_strategy;
     vector_prune_strategy_ = param.vector_prune_strategy;
     window_size_ = param.window_size;
+    reorder_type_ = param.reorder_type;
     allocator_ = index_common_param.allocator_;
 }
 
@@ -31,6 +32,14 @@ SparseIPIVF::serialize(std::ostream& out_stream) {
     out_stream.write(reinterpret_cast<const char*>(&data_dim_), sizeof(data_dim_));
     out_stream.write(reinterpret_cast<const char*>(&window_size_), sizeof(window_size_));
     out_stream.write(reinterpret_cast<const char*>(&window_num_), sizeof(window_num_));
+    int reorder_flag;
+    if (reorder_type_ == ReorderType::Reorder) {
+        reorder_flag = 1;
+        out_stream.write(reinterpret_cast<const char*>(&reorder_flag), sizeof(int));
+    } else {
+        reorder_flag = 0;
+        out_stream.write(reinterpret_cast<const char*>(&reorder_flag), sizeof(int));
+    }
 
     for (uint32_t i = 0; i < data_dim_; ++i) {
         const InvertedList& list = inverted_lists_[i];
@@ -47,14 +56,16 @@ SparseIPIVF::serialize(std::ostream& out_stream) {
         }
     }
 
-    for (auto doc_id = 0; doc_id < total_count_; ++doc_id) {
-        out_stream.write(reinterpret_cast<const char*>(&data_[doc_id].dim_), sizeof(uint32_t));
+    if (reorder_type_ == ReorderType::Reorder) {
+        for (auto doc_id = 0; doc_id < total_count_; ++doc_id) {
+            out_stream.write(reinterpret_cast<const char*>(&data_[doc_id].dim_), sizeof(uint32_t));
 
-        if (data_[doc_id].dim_ > 0) {
-            out_stream.write(reinterpret_cast<const char*>(data_[doc_id].ids_),
-                             data_[doc_id].dim_ * sizeof(uint32_t));
-            out_stream.write(reinterpret_cast<const char*>(data_[doc_id].vals_),
-                             data_[doc_id].dim_ * sizeof(float));
+            if (data_[doc_id].dim_ > 0) {
+                out_stream.write(reinterpret_cast<const char*>(data_[doc_id].ids_),
+                                 data_[doc_id].dim_ * sizeof(uint32_t));
+                out_stream.write(reinterpret_cast<const char*>(data_[doc_id].vals_),
+                                 data_[doc_id].dim_ * sizeof(float));
+            }
         }
     }
 
@@ -67,6 +78,8 @@ SparseIPIVF::deserialize(std::istream& in_stream) {
     in_stream.read(reinterpret_cast<char*>(&data_dim_), sizeof(data_dim_));
     in_stream.read(reinterpret_cast<char*>(&window_size_), sizeof(window_size_));
     in_stream.read(reinterpret_cast<char*>(&window_num_), sizeof(window_num_));
+    int reorder_flag;
+    in_stream.read(reinterpret_cast<char*>(&reorder_flag), sizeof(int));
 
     inverted_lists_ = new InvertedList[data_dim_];
 
@@ -85,24 +98,27 @@ SparseIPIVF::deserialize(std::istream& in_stream) {
         }
     }
 
-    data_ = new SparseVector[total_count_];
-    for (auto doc_id = 0; doc_id < total_count_; ++doc_id) {
-        in_stream.read(reinterpret_cast<char*>(&data_[doc_id].dim_), sizeof(uint32_t));
+    if (reorder_flag == 1) {
+        data_ = new SparseVector[total_count_];
+        for (auto doc_id = 0; doc_id < total_count_; ++doc_id) {
+            in_stream.read(reinterpret_cast<char*>(&data_[doc_id].dim_), sizeof(uint32_t));
 
-        if (data_[doc_id].dim_ > 0) {
-            data_[doc_id].ids_ = new uint32_t[data_[doc_id].dim_];
-            data_[doc_id].vals_ = new float[data_[doc_id].dim_];
-            in_stream.read(reinterpret_cast<char*>(data_[doc_id].ids_),
-                             data_[doc_id].dim_ * sizeof(uint32_t));
-            in_stream.read(reinterpret_cast<char*>(data_[doc_id].vals_),
-                             data_[doc_id].dim_ * sizeof(float));
+            if (data_[doc_id].dim_ > 0) {
+                data_[doc_id].ids_ = new uint32_t[data_[doc_id].dim_];
+                data_[doc_id].vals_ = new float[data_[doc_id].dim_];
+                in_stream.read(reinterpret_cast<char*>(data_[doc_id].ids_),
+                               data_[doc_id].dim_ * sizeof(uint32_t));
+                in_stream.read(reinterpret_cast<char*>(data_[doc_id].vals_),
+                               data_[doc_id].dim_ * sizeof(float));
+            }
         }
     }
+
     return {};
 }
 
 void
-print_sparse_vector(const SparseVector &sv) {
+print_sparse_vector(const SparseVector& sv) {
     std::cout << "vector dim: " << sv.dim_ << std::endl;
     for (auto i = 0; i < sv.dim_; ++i) {
         std::cout << sv.ids_[i] << ": " << sv.vals_[i] << std::endl;
@@ -111,6 +127,46 @@ print_sparse_vector(const SparseVector &sv) {
 
 std::vector<int64_t>
 SparseIPIVF::build(const DatasetPtr& base) {
+    if (reorder_type_ == ReorderType::Reorder) {
+        reorder_build(base);
+    } else {
+        not_reorder_build(base);
+    }
+    return {};
+}
+
+void
+SparseIPIVF::not_reorder_build(const DatasetPtr& base) {
+    this->data_dim_ = 0;
+    //// copy base dataset
+    const SparseVector* sparse_ptr = base->GetSparseVectors();
+    this->total_count_ = base->GetNumElements();
+
+    for (size_t i = 0; i < this->total_count_; ++i) {
+        const SparseVector& sv = sparse_ptr[i];
+        for (uint32_t j = 1; j < sv.dim_; ++j) {
+            assert(sv.ids_[j - 1] <= sv.ids_[j] && "IDs are not in ascending order");
+        }
+
+        if (sv.ids_[sv.dim_ - 1] > this->data_dim_) {
+            this->data_dim_ = sv.ids_[sv.dim_ - 1];
+        }
+    }
+
+    this->data_dim_ += 1;
+
+    ivf_mutex = std::vector<std::mutex>(this->data_dim_);
+    std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>
+        word_map;  // 存储剪枝后的doc_id对应的val
+
+    assert(vector_prune_strategy_.type == VectorPruneStrategyType::NotPrune);
+    vector_prune(vector_prune_strategy_, sparse_ptr, total_count_, word_map);
+
+    build_inverted_lists(word_map);
+}
+
+void
+SparseIPIVF::reorder_build(const DatasetPtr& base) {
     this->data_dim_ = 0;
     //// copy base dataset
     const SparseVector* sparse_ptr = base->GetSparseVectors();
@@ -136,58 +192,14 @@ SparseIPIVF::build(const DatasetPtr& base) {
     this->data_dim_ += 1;
 
     ivf_mutex = std::vector<std::mutex>(this->data_dim_);
-    std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>> word_map;  // 存储剪枝后的doc_id对应的val
+    std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>
+        word_map;  // 存储剪枝后的doc_id对应的val
 
-    vector_prune(sparse_ptr, word_map);
+    vector_prune(vector_prune_strategy_, data_, total_count_, word_map);
 
-    list_prune(word_map);
+    list_prune(list_prune_strategy_, data_dim_, word_map);
 
     build_inverted_lists(word_map);
-
-    return {};
-}
-
-void
-SparseIPIVF::vector_prune(
-    const SparseVector* sparse_ptr,
-    std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map) {
-    if (vector_prune_strategy_.type == VectorPruneStrategyType::VectorPrune) {
-        float n_cut = vector_prune_strategy_.vectorPrune.n_cut;
-        for (size_t i = 0; i < this->total_count_; ++i) {
-            const SparseVector& sv = sparse_ptr[i];
-            std::vector<uint32_t> top_n_indices = get_top_n_indices(sv, n_cut);
-            for (auto j = 0; j < top_n_indices.size(); j++) {
-                uint32_t word_id = sv.ids_[top_n_indices[j]];
-                float val = sv.vals_[top_n_indices[j]];
-                word_map[word_id].emplace_back(i, val);
-            }
-        }
-    } else if (vector_prune_strategy_.type == VectorPruneStrategyType::NotPrune) {
-        for (size_t i = 0; i < this->total_count_; ++i) {
-            const SparseVector& sv = sparse_ptr[i];
-            for (uint32_t j = 0; j < sv.dim_; ++j) {
-                uint32_t word_id = sv.ids_[j];
-                float val = sv.vals_[j];
-                word_map[word_id].emplace_back(i, val);
-            }
-        }
-    }
-}
-
-void
-SparseIPIVF::list_prune(
-    std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map) {
-    if (doc_prune_strategy_.type == DocPruneStrategyType::FixedSize) {
-        fixed_pruning(
-            word_map, doc_prune_strategy_.parameters.fixedSize.n_postings, this->data_dim_);
-    } else if (doc_prune_strategy_.type == DocPruneStrategyType::GlobalPrune) {
-        global_pruning(
-            word_map, doc_prune_strategy_.parameters.globalPrune.n_postings, this->data_dim_);
-        fixed_pruning(word_map,
-                      doc_prune_strategy_.parameters.globalPrune.n_postings *
-                          doc_prune_strategy_.parameters.globalPrune.fraction,
-                      this->data_dim_);
-    }
 }
 
 void
@@ -252,26 +264,33 @@ SparseIPIVF::knn_search(const DatasetPtr& query,
     dataset_results->Distances(dists);
 
     omp_set_num_threads(num_threads_);
-    long long reorder_time = 0;
 
+    if (reorder_type_ == ReorderType::Reorder) {
 #pragma omp parallel for
-    for (int i = 0; i < query_num; ++i) {
-        auto query_vector = query->GetSparseVectors()[i];
-        //std::cout << "query " << i << std::endl;
-        std::vector<float> win_dists(window_size_, 0.0);
-        this->search_one_query(
-            query_vector, k, ids + i * k, dists + i * k, win_dists);
+        for (int i = 0; i < query_num; ++i) {
+            auto query_vector = query->GetSparseVectors()[i];
+            std::vector<float> win_dists(window_size_, 0.0);
+            this->reorder_search_one_query(query_vector, k, ids + i * k, dists + i * k, win_dists);
+        }
+    } else {
+#pragma omp parallel for
+        for (int i = 0; i < query_num; ++i) {
+            auto query_vector = query->GetSparseVectors()[i];
+            std::vector<float> win_dists(window_size_, 0.0);
+            this->not_reorder_search_one_query(
+                query_vector, k, ids + i * k, dists + i * k, win_dists);
+        }
     }
 
     return std::move(dataset_results);
 }
 
 void
-SparseIPIVF::search_one_query(const SparseVector& query_vector,
-                              int64_t k,
-                              int64_t* res_ids,
-                              float* res_dists,
-                              std::vector<float>& win_dists) const {
+SparseIPIVF::reorder_search_one_query(const SparseVector& query_vector,
+                                      int64_t k,
+                                      int64_t* res_ids,
+                                      float* res_dists,
+                                      std::vector<float>& win_dists) const {
     int n = query_vector.dim_ * query_cut_;
     std::vector<std::pair<uint32_t, float>> elements(query_vector.dim_);
     std::vector<float> query_dense(data_dim_);
@@ -279,7 +298,6 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
     for (uint32_t i = 0; i < query_vector.dim_; ++i) {
         elements[i] = {query_vector.ids_[i], query_vector.vals_[i]};
         query_dense[query_vector.ids_[i]] = query_vector.vals_[i];
-
     }
 
     std::nth_element(elements.begin(),
@@ -300,8 +318,57 @@ SparseIPIVF::search_one_query(const SparseVector& query_vector,
 }
 
 void
+SparseIPIVF::not_reorder_search_one_query(const SparseVector& query_vector,
+                                          int64_t k,
+                                          int64_t* res_ids,
+                                          float* res_dists,
+                                          std::vector<float>& win_dists) const {
+    MaxHeap heap(this->allocator_.get());
+
+    float cur_heap_top = std::numeric_limits<float>::max();
+
+    for (auto window_index = 0; window_index < window_num_; ++window_index) {
+        uint32_t start = window_index * window_size_;
+        for (auto term_index = 0; term_index < query_vector.dim_; term_index++) {
+            float query_val = -query_vector.vals_[term_index];
+            auto term_id = query_vector.ids_[term_index];
+            const InvertedList& list = inverted_lists_[term_id];
+            if (list.doc_num_ == 0) [[unlikely]] {
+                continue;
+            }
+            for (auto doc_id_index = list.offsets_[window_index];
+                 doc_id_index < list.offsets_[window_index + 1];
+                 ++doc_id_index) {
+                auto doc_id = list.ids_[doc_id_index];
+                win_dists[doc_id - start] += list.vals_[doc_id_index] * query_val;
+            }
+        }
+
+        for (auto i = 0; i < window_size_; ++i) {
+            if (win_dists[i] >= cur_heap_top && heap.size() >= k) [[likely]] {
+                win_dists[i] = 0;
+                continue;
+            } else {
+                heap.emplace(win_dists[i], i + start);
+            }
+            if (heap.size() > k) {
+                heap.pop();
+            }
+            cur_heap_top = heap.top().first;
+            win_dists[i] = 0;
+        }
+    }
+
+    for (auto j = static_cast<int64_t>(heap.size() - 1); j >= 0; --j) {
+        res_dists[j] = -heap.top().first;
+        res_ids[j] = heap.top().second;
+        heap.pop();
+    }
+}
+
+void
 SparseIPIVF::accumulation_scan(std::vector<std::pair<uint32_t, float>>& query_vector,
-                               MaxHeap &heap,
+                               MaxHeap& heap,
                                std::vector<float>& dists) const {
     float cur_heap_top = std::numeric_limits<float>::max();
 
@@ -350,19 +417,19 @@ SparseIPIVF::accumulation_scan(std::vector<std::pair<uint32_t, float>>& query_ve
 }
 
 void
-SparseIPIVF::reorder(const std::vector<float> &query_dense,
-                              MaxHeap &heap,
-                              int64_t k,
-                              int64_t* res_ids,
-                              float* res_dists) const {
+SparseIPIVF::reorder(const std::vector<float>& query_dense,
+                     MaxHeap& heap,
+                     int64_t k,
+                     int64_t* res_ids,
+                     float* res_dists) const {
     MaxHeap final_heap(this->allocator_.get());
     float cur_heap_top = std::numeric_limits<float>::max();
 
-    while(!heap.empty()) {
+    while (!heap.empty()) {
         auto doc_id = heap.top().second;
 
         const SparseVector& base_vector = data_[doc_id];
-        
+
         float dist = DenseComputeIP(query_dense, base_vector);
 
         if (dist < cur_heap_top or final_heap.size() < k) {

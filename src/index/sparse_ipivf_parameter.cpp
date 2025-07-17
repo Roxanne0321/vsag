@@ -49,35 +49,52 @@ SparseIPIVFParameters::FromJson(JsonType& sparse_ipivf_param_obj, IndexCommonPar
 
     obj.vector_prune_strategy = vector_prune_strat;
 
-    if (!sparse_ipivf_param_obj.contains(DOC_PRUNE_STRATEGY)) {
+    if (!sparse_ipivf_param_obj.contains(LIST_PRUNE_STRATEGY)) {
         throw std::invalid_argument(
-            fmt::format("parameters must contains {}", DOC_PRUNE_STRATEGY));
+            fmt::format("parameters must contains {}", LIST_PRUNE_STRATEGY));
     }
 
-     if (!sparse_ipivf_param_obj[DOC_PRUNE_STRATEGY].contains(PRUNE_TYPE)) {
+     if (!sparse_ipivf_param_obj[LIST_PRUNE_STRATEGY].contains(PRUNE_TYPE)) {
         throw std::invalid_argument(
             fmt::format("parameters must contains {}", PRUNE_TYPE));
     }
 
-    std::string prune_type_str = sparse_ipivf_param_obj[DOC_PRUNE_STRATEGY][PRUNE_TYPE];
-    DocPruneStrategy prune_strat;
+    std::string prune_type_str = sparse_ipivf_param_obj[LIST_PRUNE_STRATEGY][PRUNE_TYPE];
+    ListPruneStrategy prune_strat;
 
     if (prune_type_str == "NotPrune") {
-        prune_strat.type = DocPruneStrategyType::NotPrune;
+        prune_strat.type = ListPruneStrategyType::NotPrune;
     } 
     else if (prune_type_str == "FixedSize") {
-        prune_strat.type = DocPruneStrategyType::FixedSize;
-        prune_strat.parameters.fixedSize.n_postings = sparse_ipivf_param_obj[DOC_PRUNE_STRATEGY][POSTING_LISTS];
+        prune_strat.type = ListPruneStrategyType::FixedSize;
+        prune_strat.parameters.fixedSize.n_postings = sparse_ipivf_param_obj[LIST_PRUNE_STRATEGY][POSTING_LISTS];
     } 
     else if (prune_type_str == "GlobalPrune") {
-        prune_strat.type = DocPruneStrategyType::GlobalPrune;
-        prune_strat.parameters.globalPrune.n_postings = sparse_ipivf_param_obj[DOC_PRUNE_STRATEGY][POSTING_LISTS];
-        prune_strat.parameters.globalPrune.fraction = sparse_ipivf_param_obj[DOC_PRUNE_STRATEGY][MAX_FRACTION];
+        prune_strat.type = ListPruneStrategyType::GlobalPrune;
+        prune_strat.parameters.globalPrune.n_postings = sparse_ipivf_param_obj[LIST_PRUNE_STRATEGY][POSTING_LISTS];
+        prune_strat.parameters.globalPrune.fraction = sparse_ipivf_param_obj[LIST_PRUNE_STRATEGY][MAX_FRACTION];
     } 
     else {
         throw std::invalid_argument("Unknown strategy type");
     }
-    obj.doc_prune_strategy = prune_strat;
+    obj.list_prune_strategy = prune_strat;
+
+    if (!sparse_ipivf_param_obj.contains(REORDER_TYPE)) {
+        throw std::invalid_argument(
+            fmt::format("parameters must contains {}", REORDER_TYPE));
+    }
+
+    std::string reorder_type_str = sparse_ipivf_param_obj[REORDER_TYPE];
+    ReorderType reorder_t;
+
+    if (reorder_type_str == "Reorder") {
+        reorder_t = ReorderType::Reorder;
+    }
+    else if (reorder_type_str == "NotReorder") {
+        reorder_t = ReorderType::NotReorder;
+    }
+
+    obj.reorder_type = reorder_t;
 
     return obj;
 }

@@ -127,7 +127,7 @@ extern const char* const BRUTE_FORCE_IO_TYPE;
 // sparse params
 extern const char* const SPARSE_NUM_THREADS;
 extern const char* const QUERY_CUT;
-extern const char* const DOC_PRUNE_STRATEGY;
+extern const char* const LIST_PRUNE_STRATEGY;
 extern const char* const PRUNE_TYPE;
 extern const char* const POSTING_LISTS;
 extern const char* const MAX_FRACTION;
@@ -144,5 +144,6 @@ extern const char* const INDEX_SEARCH_NUM;
 extern const char* const WINDOW_SIZE;
 extern const char* const KMEANS_ITER;
 extern const char* const REORDER_K;
+extern const char* const REORDER_TYPE;
 
 }  // namespace vsag

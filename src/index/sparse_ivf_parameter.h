@@ -25,7 +25,7 @@ public:
     FromJson(JsonType& sparse_ivf_param_obj, IndexCommonParam index_common_param);
 
 public:
-    DocPruneStrategy doc_prune_strategy;
+    ListPruneStrategy list_prune_strategy;
     BuildStrategy build_strategy;
     VectorPruneStrategy vector_prune_strategy;
     std::string ivf_size_file{""};

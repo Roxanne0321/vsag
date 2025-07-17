@@ -235,7 +235,7 @@ private:
     mutable size_t query_cut_;
     mutable int num_threads_;
     mutable float heap_factor_;
-    DocPruneStrategy doc_prune_strategy_;
+    ListPruneStrategy list_prune_strategy_;
     BuildStrategy build_strategy_;
     VectorPruneStrategy vector_prune_strategy_;
     std::string ivf_size_file_;

@@ -37,7 +37,7 @@ Construct sparse indexes using the given datasets.
 
 - `--dataset`: The dataset file used for building the index (e.g., `base_1M.csr`).
 - `--window_size`: Specifies the window size for data set partitioning, related to cache size (e.g., `100000`).
-- `--n_cut`: Number of non-zero elements retained post document truncation; commonly set between 25-40 for `base_1M`.
+- `--n_cut`: ; commonly set between 25-40 for `base_1M`.
 
 **Command Line Example:**
 
