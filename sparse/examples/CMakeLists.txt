@@ -1,0 +1,5 @@
+add_executable(sparse_index_build sparse_index_build.cpp)
+target_link_libraries(sparse_index_build vsag)
+
+add_executable(sparse_index_search sparse_index_search.cpp)
+target_link_libraries(sparse_index_search vsag)
