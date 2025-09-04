@@ -47,8 +47,6 @@ SparseBF::knn_search(const DatasetPtr& query,
                       const std::string& parameters,
                       const std::function<bool(int64_t)>& filter) const {
     auto params = SparseBFSearchParameters::FromJson(parameters);
-    this->num_threads_ = params.num_threads;
-    //std::cout << "num_threads is : " << num_threads_ << std::endl;
     
     uint32_t query_num = query->GetNumElements();
     auto dataset_results = Dataset::Make();
@@ -60,40 +58,29 @@ SparseBF::knn_search(const DatasetPtr& query,
     auto* dists = (float*)allocator_->Allocate(sizeof(float) * query_num * k);
     dataset_results->Distances(dists);
 
-    uint32_t dist_cmp = 0;
-
-    //int num_threads = omp_get_max_threads();
-    omp_set_num_threads(num_threads_);
+    int num_threads = omp_get_max_threads();
+    omp_set_num_threads(num_threads);
     #pragma omp parallel for
     for(int i = 0; i < query_num; ++i){
-        uint32_t temp_cmp;
         auto query_vector = query->GetSparseVectors()[i];
-        this->search_one_query(query_vector, k, ids + i * k, dists + i * k, temp_cmp);
-        #pragma omp critical
-        {
-            dist_cmp += temp_cmp;
-        }
+        this->search_one_query(query_vector, k, ids + i * k, dists + i * k);
     }
-
-    std::cout << "dist_cmp: " << dist_cmp << std::endl;
     return std::move(dataset_results);
 }
 
 void SparseBF::search_one_query(const SparseVector& query_vector, int64_t k, 
-                          int64_t* res_ids, float* res_dists, uint32_t& dist_cmp) const{
+                          int64_t* res_ids, float* res_dists) const{
     for (uint32_t j = 1; j < query_vector.dim_; ++j) {
         assert(query_vector.ids_[j - 1] <= query_vector.ids_[j] && "IDs are not in ascending order");
     }
 
     MaxHeap heap(this->allocator_.get());
     float cur_heap_top = std::numeric_limits<float>::max();
-    dist_cmp = 0;
 
     for (size_t i = 0; i < this->total_count_; ++i) {
         SparseVector base_vector = this->data_[i];
 
         float dist = SparseComputeIP(query_vector, base_vector);
-        dist_cmp++;
 
         if (heap.size() < k || dist < cur_heap_top) {
             heap.emplace(dist, i);

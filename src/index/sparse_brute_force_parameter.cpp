@@ -31,8 +31,8 @@
         throw std::invalid_argument(
             fmt::format("parameters must contains {}", INDEX_SPARSE_BRUTE_FORCE));
     }
-        if(params[INDEX_SPARSE_BRUTE_FORCE].contains(SPARSE_NUM_THREADS)) {
-            obj.num_threads = params[INDEX_SPARSE_BRUTE_FORCE][SPARSE_NUM_THREADS];
+        if(params[INDEX_SPARSE_BRUTE_FORCE].contains(SEARCH_NUM_THREADS)) {
+            obj.num_threads = params[INDEX_SPARSE_BRUTE_FORCE][SEARCH_NUM_THREADS];
         }
         return obj;
     }

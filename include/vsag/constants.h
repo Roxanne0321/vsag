@@ -22,10 +22,8 @@ extern const char* const INDEX_HNSW;
 extern const char* const INDEX_FRESH_HNSW;
 extern const char* const INDEX_PYRAMID;
 extern const char* const INDEX_BRUTE_FORCE;
-extern const char* const INDEX_SPARSE_IVF;
 extern const char* const INDEX_SPARSE_BRUTE_FORCE;
-extern const char* const INDEX_SPARSE_IPIVF;
-extern const char* const INDEX_SPARSE_KMEANS;
+extern const char* const INDEX_SINDI;
 extern const char* const DIM;
 extern const char* const NUM_ELEMENTS;
 extern const char* const IDS;
@@ -125,24 +123,10 @@ extern const char* const BRUTE_FORCE_QUANTIZATION_TYPE;
 extern const char* const BRUTE_FORCE_IO_TYPE;
 
 // sparse params
-extern const char* const SPARSE_NUM_THREADS;
-extern const char* const QUERY_CUT;
-extern const char* const DOC_PRUNE_STRATEGY;
-extern const char* const PRUNE_TYPE;
-extern const char* const POSTING_LISTS;
-extern const char* const MAX_FRACTION;
-extern const char* const VECTOR_PRUNE_STRATEGY;
-extern const char* const NCUT;
-extern const char* const BUILD_STRATEGY;
-extern const char* const BUILD_TYPE;
-extern const char* const MIN_CLUSTER_SIZE;
-extern const char* const CENTROID_FRACTION;
-extern const char* const SUMMARY_ENERGY;
-extern const char* const HEAP_FACTOR;
-extern const char* const INDEX_CLUSTER_NUM;
-extern const char* const INDEX_SEARCH_NUM;
-extern const char* const WINDOW_SIZE;
-extern const char* const KMEANS_ITER;
-extern const char* const REORDER_K;
+extern const char* const SEARCH_NUM_THREADS;
+extern const char* const SINDI_LAMBDA;
+extern const char* const SINDI_ALPHA;
+extern const char* const SINDI_BETA;
+extern const char* const SINDI_GAMMA;
 
 }  // namespace vsag

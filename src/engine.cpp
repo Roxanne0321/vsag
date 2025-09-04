@@ -22,12 +22,8 @@
 #include "common.h"
 #include "index/sparse_brute_force.h"
 #include "index/sparse_brute_force_parameter.h"
-#include "index/sparse_ivf.h"
-#include "index/sparse_ivf_parameter.h"
-#include "index/sparse_ipivf.h"
-#include "index/sparse_ipivf_parameter.h"
-#include "index/sparse_kmeans.h"
-#include "index/sparse_kmeans_parameters.h"
+#include "index/sindi.h"
+#include "index/sindi_parameter.h"
 #include "index/brute_force.h"
 #include "index/brute_force_parameter.h"
 #include "index/diskann.h"
@@ -137,16 +133,7 @@ Engine::CreateIndex(const std::string& origin_name, const std::string& parameter
                 PyramidParameters::FromJson(pyramid_param_obj, index_common_params);
             logger::debug("created a pyramid index");
             return std::make_shared<Pyramid>(pyramid_params, index_common_params);
-        }else if(name == INDEX_SPARSE_IVF){
-            // read parameters from json, throw exception if not exists
-            CHECK_ARGUMENT(parsed_params.contains(INDEX_SPARSE_IVF),
-                           fmt::format("parameters must contains {}", INDEX_SPARSE_IVF));
-            auto& sparse_ivf_param_obj = parsed_params[INDEX_SPARSE_IVF];
-            auto sparse_ivf_params = SparseIVFParameters::FromJson(sparse_ivf_param_obj, index_common_params);
-            logger::debug("created a sparse ivf index");
-            auto index = std::make_shared<SparseIVF>(sparse_ivf_params, index_common_params);
-            return index;
-        }else if(name == INDEX_SPARSE_BRUTE_FORCE){
+        } else if(name == INDEX_SPARSE_BRUTE_FORCE){
             // read parameters from json, throw exception if not exists
             CHECK_ARGUMENT(parsed_params.contains(INDEX_SPARSE_BRUTE_FORCE),
                            fmt::format("parameters must contains {}", INDEX_SPARSE_BRUTE_FORCE));
@@ -155,23 +142,14 @@ Engine::CreateIndex(const std::string& origin_name, const std::string& parameter
             logger::debug("created a sparse brute force index");
             auto index = std::make_shared<SparseBF>(sparse_bf_params, index_common_params);
             return index;
-        } else if(name == INDEX_SPARSE_IPIVF){
+        } else if(name == INDEX_SINDI){
             // read parameters from json, throw exception if not exists
-            CHECK_ARGUMENT(parsed_params.contains(INDEX_SPARSE_IPIVF),
-                           fmt::format("parameters must contains {}", INDEX_SPARSE_IPIVF));
-            auto& sparse_ipivf_param_obj = parsed_params[INDEX_SPARSE_IPIVF];
-            auto sparse_ipivf_params = SparseIPIVFParameters::FromJson(sparse_ipivf_param_obj, index_common_params);
-            logger::debug("created a sparse ip ivf index");
-            auto index = std::make_shared<SparseIPIVF>(sparse_ipivf_params, index_common_params);
-            return index;
-        } else if(name == INDEX_SPARSE_KMEANS){
-            // read parameters from json, throw exception if not exists
-            CHECK_ARGUMENT(parsed_params.contains(INDEX_SPARSE_KMEANS),
-                           fmt::format("parameters must contains {}", INDEX_SPARSE_KMEANS));
-            auto& sparse_kmeans_param_obj = parsed_params[INDEX_SPARSE_KMEANS];
-            auto sparse_kmeans_params = SparseKmeansParameters::FromJson(sparse_kmeans_param_obj, index_common_params);
-            logger::debug("created a sparse kmeans index");
-            auto index = std::make_shared<SparseKmeans>(sparse_kmeans_params, index_common_params);
+            CHECK_ARGUMENT(parsed_params.contains(INDEX_SINDI),
+                           fmt::format("parameters must contains {}", INDEX_SINDI));
+            auto& sindi_param_obj = parsed_params[INDEX_SINDI];
+            auto sindi_params = SindiParameters::FromJson(sindi_param_obj, index_common_params);
+            logger::debug("created a sindi index");
+            auto index = std::make_shared<Sindi>(sindi_params, index_common_params);
             return index;
         } else {
             LOG_ERROR_AND_RETURNS(

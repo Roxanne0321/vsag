@@ -1,13 +1,15 @@
 #include <omp.h>
 #include <sys/stat.h>
-#include <vsag/vsag.h>
-
 #include <chrono>
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <getopt.h>
+#include <unordered_set>
+
+#include "vsag/vsag.h"
+
 using namespace std::chrono;
 
 std::pair<vsag::SparseVector*, int64_t>
@@ -53,70 +55,49 @@ read_sparse_vectors_from_csr_file(const std::string& filename) {
 }
 
 int main(int argc, char** argv) {
-    vsag::init();
-
-    std::string dataset = "base_1M"; // Provide default values
-    int window_size = 100000;
-    int n_cut = 40;
-
-    struct option long_options[] = {
-        {"dataset", required_argument, 0, 'd'},
-        {"window_size", required_argument, 0, 'w'},
-        {"n_cut", required_argument, 0, 'n'},
-        {0, 0, 0, 0}
-    };
-
-    int opt;
-    while ((opt = getopt_long(argc, argv, "d:w:n:", long_options, NULL)) != -1) {
-        switch (opt) {
-            case 'd':
-                dataset = optarg;
-                break;
-            case 'w':
-                window_size = std::stoi(optarg);
-                break;
-            case 'n':
-                n_cut = std::stoi(optarg);
-                break;
-            default:
-                std::cerr << "Usage: " << argv[0] << " [--dataset <dataset>] [--window_size <window_size>] [--n_cut <n_cut>]" << std::endl;
-                return 1;
-        }
+    if (argc != 5) {
+        std::cerr << "Usage: " << argv[0]
+                  << " <basefile> <lambda> <alpha> <index_path>\n";
+        return 1;
     }
 
-    std::cout << "dataset: " << dataset << std::endl;
-    std::cout << "window_size: " << window_size << std::endl;
-    std::cout << "n_cut: " << n_cut << std::endl;
+    std::string basefile = argv[1];
+    int lambda = std::stoi(argv[2]);
+    float alpha = std::stof(argv[3]);
+    std::string index_path = argv[4];
 
-    std::string basefile = "sparse/data/" + dataset + ".csr";
+    std::cout << "basefile: " << basefile << "\n";
+    std::cout << "lambda: " << lambda << "\n";
+    std::cout << "alpha: " << alpha << "\n";
+    std::cout << "index_path: " << index_path << "\n";
+
     std::pair<vsag::SparseVector*, int64_t> base_results = read_sparse_vectors_from_csr_file(basefile);
-
+    
     auto base = vsag::Dataset::Make();
     base->SparseVectors(base_results.first)->NumElements(base_results.second)->Owner(true);
 
-    nlohmann::json sparse_ipivf_build_parameters = {
-        {"dtype", "float32"},
-        {"metric_type", "ip"},
-        {"dim", 30000},
-        {"sparse_ipivf",
-         {{"window_size", window_size},
-          {"doc_prune_strategy", {{"prune_type", "NotPrune"}}},
-          {"vector_prune_strategy",
-           {{"prune_type", "VectorPrune"}, {"n_cut", n_cut}}}}}};
+    
+    vsag::init();
+    nlohmann::json sindi_build_parameters = {
+            {"dtype", "float32"},
+            {"metric_type", "ip"},
+            {"dim", 30000},
+            {"sindi",
+             {{"lambda", lambda},
+              {"alpha", alpha}}}};
 
+    std::cout << "Start building sindi index" << std::endl;
     auto index =
-        vsag::Factory::CreateIndex("sparse_ipivf", sparse_ipivf_build_parameters.dump()).value();
+        vsag::Factory::CreateIndex("sindi", sindi_build_parameters.dump()).value();
 
     if (auto build_result = index->Build(base); build_result.has_value()) {
-        std::cout << "After Build(), Index SparseIPIVF contains: "
+        std::cout << "After Build(), Index Sindi contains: "
                   << index->GetNumElements() << std::endl;
     } else if (build_result.error().type == vsag::ErrorType::INTERNAL_ERROR) {
         std::cerr << "Failed to build index: internalError" << std::endl;
         exit(-1);
     }
 
-    std::string index_path = "sparse/index/" + dataset + "_ws_" + std::to_string(window_size) +
-                             "_nc_" + std::to_string(n_cut) + ".idx";
     std::ofstream index_file(index_path, std::ios::binary);
 
     if (!index_file) {

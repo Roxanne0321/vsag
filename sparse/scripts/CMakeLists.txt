@@ -1,0 +1,8 @@
+add_executable(sindi_index_build sindi_index_build.cpp)
+target_link_libraries(sindi_index_build vsag)
+
+add_executable(sindi_index_search sindi_index_search.cpp)
+target_link_libraries(sindi_index_search vsag)
+
+add_executable(generate_gt generate_gt.cpp)
+target_link_libraries(generate_gt vsag)

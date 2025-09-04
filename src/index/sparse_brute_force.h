@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #pragma once
+#include <omp.h>
 
 #include "vsag/index.h"
 #include "../utils.h"
@@ -23,8 +24,7 @@
 #include "stream_reader.h"
 #include "stream_writer.h"
 #include "sparse_brute_force_parameter.h"
-#include <omp.h>
-#include "algorithm/seismic/utils.h"
+#include "algorithm/sindi/utils.h"
 
 namespace vsag{
 
@@ -145,7 +145,7 @@ private:
                const std::function<bool(int64_t)>& filter) const;
 
     void search_one_query(const SparseVector& query_vector, int64_t k, 
-                          int64_t* res_ids, float* res_dists, uint32_t& dist_cmp) const;
+                          int64_t* res_ids, float* res_dists) const;
 
     uint64_t
     cal_serialize_size() const {
@@ -156,6 +156,5 @@ private:
     uint32_t total_count_{0};
     std:: shared_ptr<Allocator> allocator_{nullptr};
     SparseVector* data_;
-    mutable int num_threads_;
     };
 }

@@ -20,36 +20,45 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <chrono>
+#include <unordered_set>
 
-#include "../utils.h"
 #include "common.h"
 #include "safe_allocator.h"
+#include "simd/fp32_simd.h"
+#include "sindi_parameter.h"
 #include "typing.h"
 #include "vsag/index.h"
-#include "sparse_kmeans_parameters.h"
-#include "algorithm/seismic/utils.h"
-#include "algorithm/seismic/summary.h"
+#include "algorithm/sindi/utils.h"
 
 namespace vsag {
-class SparseKmeans : public Index {
+class Sindi : public Index {
 public:
-    SparseKmeans(const SparseKmeansParameters& param, const IndexCommonParam& index_common_param);
-    ~SparseKmeans() {
-        if (this->cluster_lists_) {
-            for (int i = 0; i < cluster_num_; ++i) {
-                if (cluster_lists_[i].inverted_lists_) {
-                    for (int j = 0; j < this->data_dim_; ++j) {
-                        if (this->cluster_lists_[i].inverted_lists_[j].doc_num_ != 0) {
-                            delete[] this->cluster_lists_[i].inverted_lists_[j].ids_;
-                            delete[] this->cluster_lists_[i].inverted_lists_[j].vals_;
-                        }
-                    }
-                    delete[] this->cluster_lists_[i].inverted_lists_;
+    Sindi(const SindiParameters& param, const IndexCommonParam& index_common_param);
+    ~Sindi() {
+        if (this->inverted_lists_) {
+            for (int i = 0; i < this->data_dim_; ++i) {
+                if (this->inverted_lists_[i].doc_num_ != 0) {
+                    delete[] this->inverted_lists_[i].ids_;
+                    delete[] this->inverted_lists_[i].vals_;
+                    delete[] this->inverted_lists_[i].offsets_;
                 }
             }
-            delete[] this->cluster_lists_;
+            delete[] this->inverted_lists_;
         }
 
+        if (this->data_) {
+            for (auto i = 0; i < total_count_; ++i) {
+                if (data_[i].dim_ != 0) {
+                    delete[] data_[i].ids_;
+                    delete[] data_[i].vals_;
+                }
+            }
+        }
+
+        for (auto& lock : ivf_mutex) {
+            std::lock_guard<std::mutex> lg(lock);
+        }
         allocator_.reset();
     }
 
@@ -155,12 +164,10 @@ private:
     build(const DatasetPtr& data);
 
     void
-    partition_into_clusters(const SparseVector* sparse_ptr,
-                            std::vector<std::vector<uint32_t>>& clusters);
+    vector_prune(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
 
     void
-    build_cluster_lists(const SparseVector* sparse_ptr,
-                        std::vector<std::vector<uint32_t>>& clusters);
+    build_inverted_lists(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
 
     DatasetPtr
     knn_search(const DatasetPtr& query,
@@ -173,19 +180,19 @@ private:
                      int64_t k,
                      int64_t* res_ids,
                      float* res_dists,
-                     long long &search_data_num,
-                     long long &accumulation_time,
-                     long long &heap_time) const;
+                     std::vector<float> &win_dists) const;
 
     void
-    search_one_cluster(const SparseVector& query_vector,
-                       uint32_t cluster_id,
-                       std::vector<float> &dists,
-                       int64_t k,
-                       MaxHeap &heap,
-                       float cur_heap_top,
-                       long long &accumulation_time,
-                       long long &heap_time) const;
+    accumulation_scan(std::vector<std::pair<uint32_t, float>>& query_vector,
+                      MaxHeap &heap,
+                      std::vector<float>& dists) const;
+    
+    void
+    reorder(const std::vector<float> &query_dense,
+                     MaxHeap &heap,
+                     int64_t k,
+                     int64_t* res_ids,
+                     float* res_dists) const;
 
     uint64_t
     cal_serialize_size() const {
@@ -199,32 +206,30 @@ private:
     deserialize(std::istream& in_stream);
 
 private:
+    // index params and structures
     struct InvertedList {
         uint32_t doc_num_{0};
         uint32_t* ids_{nullptr};
         float* vals_{nullptr};
+        uint32_t* offsets_{nullptr};
     };
 
-    struct ClusterLists {
-        uint32_t doc_num_{0};
-        std::vector<uint32_t> doc_ids_;
-        InvertedList* inverted_lists_{nullptr};
-    };
-
+    SparseVector* data_;
     uint32_t data_dim_{0};
     uint32_t total_count_{0};
-    uint32_t max_cluster_doc_num_{0};
     std::shared_ptr<Allocator> allocator_{nullptr};
+    InvertedList* inverted_lists_{nullptr};
 
-    uint32_t cluster_num_;
-    uint32_t min_cluster_size_;
-    float summary_energy_;
-    uint32_t kmeans_iter_;
-    ClusterLists* cluster_lists_{nullptr};
-    QuantizedSummary summaries;
+    // build parameters
+    uint32_t lambda_;
+    uint32_t sigma_; 
+    float alpha_;    
 
-    //parameters
+    // search parameters
     mutable int num_threads_;
-    mutable uint32_t search_num_;
+    mutable float beta_;
+    mutable int gamma_;
+    //mutex
+    std::vector<std::mutex> ivf_mutex;
 };
 }  // namespace vsag

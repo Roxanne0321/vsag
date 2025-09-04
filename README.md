@@ -1,119 +1,70 @@
+# SINDI: Sparse Inverted Non-redundant Distance Index
+
 <div align="center">
-  <h1><img alt="vsag-pages" src="docs/banner.svg" width=500/></h1>
-
-![CircleCI](https://img.shields.io/circleci/build/github/antgroup/vsag?logo=circleci&label=CircleCI)
-[![codecov](https://codecov.io/gh/antgroup/vsag/graph/badge.svg?token=KDT3SpPMYS)](https://codecov.io/gh/antgroup/vsag)
-![GitHub License](https://img.shields.io/github/license/antgroup/vsag)
-![GitHub Release](https://img.shields.io/github/v/release/antgroup/vsag?label=last%20release)
-![GitHub Contributors](https://img.shields.io/github/contributors/antgroup/vsag)
-[![arXiv](https://badgen.net/static/arXiv/2404.16322/red)](http://arxiv.org/abs/2404.16322)
-
-![PyPI - Version](https://img.shields.io/pypi/v/pyvsag)
-![PyPI - Python Version](https://img.shields.io/pypi/pyversions/pyvsag)
-[![PyPI Downloads](https://static.pepy.tech/badge/pyvsag)](https://pepy.tech/projects/pyvsag)
-[![PyPI Downloads](https://static.pepy.tech/badge/pyvsag/month)](https://pepy.tech/projects/pyvsag)
-[![PyPI Downloads](https://static.pepy.tech/badge/pyvsag/week)](https://pepy.tech/projects/pyvsag)
+  <h3>Proof-of-Concept – Integrated into <a href="https://github.com/antgroup/vsag">VSAG</a></h3>
 </div>
 
+## Introduction
 
-## What is VSAG
+This repository hosts the **proof-of-concept and research prototype implementation** of the **SINDI**, an efficient algorithm for **Approximate Maximum Inner Product Search** (AMIPS) on sparse vectors. It was proposed in the paper *"SINDI: An Efficient Index for Sparse Vector Approximate Maximum Inner Product Search"*.
 
-VSAG is a vector indexing library used for similarity search. The indexing algorithm allows users to search through various sizes of vector sets, especially those that cannot fit in memory. The library also provides methods for generating parameters based on vector dimensions and data scale, allowing developers to use it without understanding the algorithm’s principles. VSAG is written in C++ and provides a Python wrapper package called [pyvsag](https://pypi.org/project/pyvsag/).
+⚠️ **Note for Practitioners:**  
+The SINDI index has been **fully integrated into the [VSAG](https://github.com/antgroup/vsag) framework**, which provides a **production-grade implementation** with ongoing maintenance, cross-version compatibility, and Python/C++ APIs.  
+For deployment, benchmarking, or large-scale production scenarios, please refer to the  
+**`Sindi` index within the VSAG repository** instead of this prototype.
 
-## Performance
-The VSAG algorithm achieves a significant boost of efficiency and outperforms the previous **state-of-the-art (SOTA)** by a clear margin. Specifically, VSAG's QPS exceeds that of the previous SOTA algorithm, Glass, by over 100%, and the baseline algorithm, HNSWLIB, by over 300% according to the ann-benchmark result on the GIST dataset at 90% recall.
-The test in [ann-benchmarks](https://ann-benchmarks.com/) is running on an r6i.16xlarge machine on AWS with `--parallelism 31`, single-CPU, and hyperthreading disabled.
-The result is as follows:
+---
 
-### gist-960-euclidean
-![](./docs/gist-960-euclidean_10_euclidean.png)
+## Parameters
+### **Index Construction Parameters**
+- **`--window_size` (λ)**：Window size controls how many vector IDs are processed per cache-local segment. Smaller λ ⇒ fewer random accesses but more window switches; larger λ ⇒ better posting list locality but more random writes. λ is tuned to the target hardware’s cache capacity and latency characteristics.
+- **`--doc_prune_ratio` (α)**：Document pruning ratio. Retains the minimal set of high-value non-zero entries whose cumulative mass ≥ α × (total vector mass). Higher α preserves more entries (↑ recall, ↓ QPS); lower α prunes more aggressively (↑ QPS, slight recall drop). Typical: `0.1-1`.
 
-## Getting Started
-### Integrate with CMake
-```cmake
-# CMakeLists.txt
-cmake_minimum_required(VERSION 3.11)
+### **Query/Search Parameters**
+- **`--query_prune_ratio` (β)**：Query pruning ratio keeps the minimal set of high-value query entries covering β × (total query mass) during coarse retrieval. Lower β yields faster coarse search but may reduce recall before reranking. Typical: `0.1-1`.
+- **`--reorder_size` (γ)**：Reordering candidate pool size. Number of coarse-stage candidates reranked with exact inner product to produce final top-k results. Larger γ increases recall but adds refinement cost. Common: k × 5 to k × 50. Typical: `50-2000`.
 
-project (myproject)
+## Installation
 
-set (CMAKE_CXX_STANDARD 11)
+You can build SINDI as part of the VSAG framework from source.
 
-# download and compile vsag
-include (FetchContent)
-FetchContent_Declare (
-  vsag
-  GIT_REPOSITORY https://github.com/antgroup/vsag
-  GIT_TAG main
-)
-FetchContent_MakeAvailable (vsag)
-include_directories (vsag-cmake-example PRIVATE ${vsag_SOURCE_DIR}/include)
-
-# compile executable and link to vsag
-add_executable (vsag-cmake-example src/main.cpp)
-target_link_libraries (vsag-cmake-example PRIVATE vsag)
-
-# add dependency
-add_dependencies (vsag-cmake-example vsag)
-```
-### Examples
-
-Currently Python and C++ examples are provided, please explore [examples](./examples/) directory for details.
-
-We suggest you start with [simple_hnsw.cpp](./examples/cpp/simple_hnsw.cpp) and [example_hnsw.py](./examples/python/example_hnsw.py).
-
-## Building from Source
-Please read the [DEVELOPMENT](./DEVELOPMENT.md) guide for instructions on how to build.
-
-## Who's Using VSAG
-- [OceanBase](https://github.com/oceanbase/oceanbase)
-- [TuGraph](https://github.com/TuGraph-family/tugraph-db)
-- [GreptimeDB](https://github.com/GreptimeTeam/greptimedb)
-
-![vsag_users](./docs/vsag_users.svg)
-
-If your system uses VSAG, then feel free to make a pull request to add it to the list.
-
-## How to Contribute
-Although VSAG is initially developed by the Vector Database Team at Ant Group, it's the work of
-the [community](https://github.com/antgroup/vsag/graphs/contributors), and contributions are always welcome!
-See [CONTRIBUTING](./CONTRIBUTING.md) for ways to get started.
-
-## Community
-![Discord](https://img.shields.io/discord/1298249687836393523?logo=discord&label=Discord)
-
-Thrive together in VSAG community with users and developers from all around the world.
-
-- Discuss at [discord](https://discord.com/invite/JyDmUzuhrp).
-- Follow us on [Weixin Official Accounts](./docs/weixin-qr.jpg)（微信公众平台）to get the latest news.
-
-## Roadmap
-- v0.13 (ETA: Jan. 2025)
-  - introduce new index AllScanIndex that supports brute force search and read raw vector
-  - support in-place update on HNSW
-  - support automatically optimization on Graph
-- v0.14 (ETA: Mar. 2025)
-  - support inverted index(be like IVFFlat) based on datacell
-  - support extrainfo storage within vector
-  - implement a new MultiIndex that supports efficient pre-filtering on enumerable tags
-- v0.15 (ETA: Apr. 2025)
-  - support sparse vector searching
-  - introduce pluggable product quantization(known as PQ) in datacell
-
-## Reference
-Reference to cite when you use VSAG in a research paper:
-```
-@article{Yang2024EffectiveAG,
-  title={Effective and General Distance Computation for Approximate Nearest Neighbor Search},
-  author={Mingyu Yang and Wentao Li and Jiabao Jin and Xiaoyao Zhong and Xiangyu Wang and Zhitao Shen and Wei Jia and Wei Wang},
-  year={2024},
-  url={https://arxiv.org/abs/2404.16322}
-}
+```bash
+git clone -b sparse --single-branch https://github.com/Roxanne0321/vsag.git
+cd vsag
+make release
 ```
 
-## Star History
+## 📂 Offline Evaluation Datasets
 
-[![Star History Chart](https://api.star-history.com/svg?repos=antgroup/vsag&type=Date)](https://star-history.com/#antgroup/vsag&Date)
+The offline benchmark datasets used in this work are derived from the **BigANN Sparse Vector Track**,  
+which in turn is based on the **MSMARCO Passage Ranking** corpus encoded with the **SPLADE** model.
 
-## License
-[Apache License 2.0](./LICENSE)
+- **Base datasets** contain SPLADE-encoded sparse vectors for MS MARCO passages.
+- **Query dataset** contains SPLADE-encoded sparse vectors for 6,980 development queries.
+- Vectors are stored in **Compressed Sparse Row (CSR)** format, with dimensionality up to ~100,000  
+  and an average of ~120 non-zero entries per base vector, ~49 per query vector.
 
+### Download Links
+
+| Dataset Name | Type | Size (vectors) | Download URL |
+| :---: | :---: | :---: | :---: |
+| `base_small` | Base | 100,000 | [Download](https://storage.googleapis.com/ann-challenge-sparse-vectors/csr/base_small.csr.gz) |
+| `base_1M`    | Base | 1,000,000 | [Download](https://storage.googleapis.com/ann-challenge-sparse-vectors/csr/base_1M.csr.gz) |
+| `base_full`  | Base   | 8,841,823 | [Download](https://storage.googleapis.com/ann-challenge-sparse-vectors/csr/base_full.csr.gz) |
+| `queries`    | Query  | 6,980 | [Download](https://storage.googleapis.com/ann-challenge-sparse-vectors/csr/queries.dev.csr.gz) |
+
+## Usage
+### Build Index
+```bash
+./build-release/sparse/scripts/sindi_index_build <basefile> <lambda> <alpha> <index_path>
+```
+
+### Generate Groung Truth
+```base
+./build-release/sparse/scripts/generate_gt <basefile> <queryfile> <gtfile> <topk>
+```
+
+### Search Index
+```bash
+./build-release/sparse/scripts/sindi_index_search <index_path> <queryfile> <gtfile> <beta> <gamma> <topk> <num_threads>
+```
