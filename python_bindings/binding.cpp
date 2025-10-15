@@ -83,7 +83,7 @@ public:
     }
 
     void
-    SparseIVFBuild(const std::string& filename) {
+    SindiBuild(const std::string& filename) {
         std::ifstream infile(filename, std::ios::binary);
         if (!infile) {
             throw std::runtime_error("Could not open file");
@@ -172,7 +172,6 @@ public:
             auto dists_view = dists.mutable_unchecked<2>();  // 注意这里指定为二维
             auto vsag_dists = result.value()->GetDistances();
 
-            // 使用二维索引遍历
             for (int i = 0; i < nq; ++i) {
                 for (int j = 0; j < topk; ++j) {
                     ids_view(i, j) = vsag_ids[i * topk + j];
@@ -274,7 +273,7 @@ PYBIND11_MODULE(_pyvsag, m) {
              py::arg("ids"),
              py::arg("num_elements"),
              py::arg("dim"))
-        .def("sparse_ivf_build", &Index::SparseIVFBuild, py::arg("filename"))
+        .def("sindi_build", &Index::SindiBuild, py::arg("filename"))
         .def(
             "knn_search", &Index::KnnSearch, py::arg("vector"), py::arg("k"), py::arg("parameters"))
         .def("batch_search",

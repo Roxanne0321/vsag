@@ -182,6 +182,8 @@ data/
 /lcov_cobertura.py
 /testresult/
 *.index
+*.idx
+/examples/python/example_sindi.py
 
 /build-release/
 *.so.[0-9]*
@@ -194,3 +196,4 @@ data/
 /results/
 /experiments/
 l_oneapi_vtune_p_2024.2.1.68_offline.sh
+
