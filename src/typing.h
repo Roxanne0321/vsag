@@ -59,4 +59,9 @@ struct CompareByFirst {
 using MaxHeap = std::priority_queue<std::pair<float, InnerIdType>,
                                     Vector<std::pair<float, InnerIdType>>,
                                     CompareByFirst>;
+
+enum PruneStrategy {
+    FixedRatio,
+    MassRatio,
+};
 }  // namespace vsag

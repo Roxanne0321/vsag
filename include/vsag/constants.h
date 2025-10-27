@@ -128,5 +128,5 @@ extern const char* const SINDI_LAMBDA;
 extern const char* const SINDI_ALPHA;
 extern const char* const SINDI_BETA;
 extern const char* const SINDI_GAMMA;
-
+extern const char* const PRUNE_STRAGY;
 }  // namespace vsag

@@ -27,7 +27,7 @@ public:
 public:
     float alpha{1};
     uint32_t lambda{1};
-    
+    PruneStrategy prune_stragy;
 
 protected:
     SindiParameters() = default;

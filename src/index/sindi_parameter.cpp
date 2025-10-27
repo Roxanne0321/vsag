@@ -28,7 +28,11 @@ SindiParameters::FromJson(JsonType& sparse_ipivf_param_obj, IndexCommonParam ind
 
     if (sparse_ipivf_param_obj.contains(SINDI_ALPHA)) {
         obj.alpha = sparse_ipivf_param_obj[SINDI_ALPHA];
-    } 
+    }
+    
+    if (sparse_ipivf_param_obj.contains(PRUNE_STRAGY)) {
+        obj.prune_stragy = sparse_ipivf_param_obj[PRUNE_STRAGY];
+    }
 
     return obj;
 }

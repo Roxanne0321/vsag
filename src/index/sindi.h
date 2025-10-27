@@ -224,6 +224,7 @@ private:
     uint32_t lambda_;
     uint32_t sigma_; 
     float alpha_;    
+    PruneStrategy prune_stragy_;
 
     // search parameters
     mutable int num_threads_;

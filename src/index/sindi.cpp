@@ -141,7 +141,29 @@ Sindi::build(const DatasetPtr& base) {
 }
 
 std::vector<uint32_t>
-get_top_n_indices(const SparseVector& vec, float alpha) {
+fixed_prune(const SparseVector& vec, float alpha) {
+    std::vector<uint32_t> indices(vec.dim_);
+    for (uint32_t i = 0; i < vec.dim_; ++i) {
+        indices[i] = i;
+    }
+
+    if (alpha == 1) {
+        return indices;
+    }
+
+    std::sort(
+        indices.begin(), indices.end(), [&](uint32_t a, uint32_t b) {
+            return vec.vals_[a] > vec.vals_[b];
+        });
+
+    uint32_t retained_length = static_cast<uint32_t>(static_cast<float>(vec.dim_) * alpha);
+    indices.resize(retained_length);
+
+    return indices;
+}
+
+std::vector<uint32_t>
+mass_prune(const SparseVector& vec, float alpha) {
     float total_mass = 0.0f;
     std::vector<uint32_t> indices(vec.dim_);
     for (uint32_t i = 0; i < vec.dim_; ++i) {
@@ -174,10 +196,14 @@ void
 Sindi::vector_prune(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map) {
     for (size_t i = 0; i < this->total_count_; ++i) {
         const SparseVector& sv = data_[i];
-        std::vector<uint32_t> top_n_indices = get_top_n_indices(sv, alpha_);
-        for (auto j = 0; j < top_n_indices.size(); j++) {
-            uint32_t word_id = sv.ids_[top_n_indices[j]];
-            float val = sv.vals_[top_n_indices[j]];
+        std::vector<uint32_t> retained_ids;
+        if (prune_stragy_ == PruneStrategy::FixedRatio) {
+            retained_ids = fixed_prune(sv, alpha_);
+        }
+        retained_ids = mass_prune(sv, alpha_);
+        for (auto j = 0; j < retained_ids.size(); j++) {
+            uint32_t word_id = sv.ids_[retained_ids[j]];
+            float val = sv.vals_[retained_ids[j]];
             word_map[word_id].emplace_back(i, val);
         }
     }
