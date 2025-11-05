@@ -75,7 +75,6 @@ int main(int argc, char** argv) {
     
     auto base = vsag::Dataset::Make();
     base->SparseVectors(base_results.first)->NumElements(base_results.second)->Owner(true);
-
     
     vsag::init();
     nlohmann::json sindi_build_parameters = {
@@ -84,7 +83,8 @@ int main(int argc, char** argv) {
             {"dim", 30000},
             {"sindi",
              {{"lambda", lambda},
-              {"alpha", alpha}}}};
+              {"alpha", alpha},
+              {"prune_stragy", "MassRatio"}}}};
 
     std::cout << "Start building sindi index" << std::endl;
     auto index =

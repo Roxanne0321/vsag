@@ -25,6 +25,7 @@ Sindi::Sindi(const SindiParameters& param,
                          const IndexCommonParam& index_common_param) {
     alpha_ = param.alpha;
     lambda_ = param.lambda;
+    prune_stragy_ = param.prune_stragy;
     allocator_ = index_common_param.allocator_;
 }
 
@@ -194,17 +195,29 @@ mass_prune(const SparseVector& vec, float alpha) {
 
 void
 Sindi::vector_prune(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map) {
-    for (size_t i = 0; i < this->total_count_; ++i) {
-        const SparseVector& sv = data_[i];
-        std::vector<uint32_t> retained_ids;
-        if (prune_stragy_ == PruneStrategy::FixedRatio) {
-            retained_ids = fixed_prune(sv, alpha_);
+    if (prune_stragy_ == PruneStrategy::FixedRatio) {
+        for (size_t i = 0; i < this->total_count_; ++i) {
+            const SparseVector& sv = data_[i];
+            std::vector<uint32_t> retained_ids = fixed_prune(sv, alpha_);
+
+            for (auto j = 0; j < retained_ids.size(); j++) {
+                uint32_t word_id = sv.ids_[retained_ids[j]];
+                float val = sv.vals_[retained_ids[j]];
+                word_map[word_id].emplace_back(i, val);
+            }
         }
-        retained_ids = mass_prune(sv, alpha_);
-        for (auto j = 0; j < retained_ids.size(); j++) {
-            uint32_t word_id = sv.ids_[retained_ids[j]];
-            float val = sv.vals_[retained_ids[j]];
-            word_map[word_id].emplace_back(i, val);
+    }
+    else if (prune_stragy_ == PruneStrategy::MassRatio) {
+        std::cout << "mass prune" << std::endl;
+        for (size_t i = 0; i < this->total_count_; ++i) {
+            const SparseVector& sv = data_[i];
+            std::vector<uint32_t> retained_ids = mass_prune(sv, alpha_);
+
+            for (auto j = 0; j < retained_ids.size(); j++) {
+                uint32_t word_id = sv.ids_[retained_ids[j]];
+                float val = sv.vals_[retained_ids[j]];
+                word_map[word_id].emplace_back(i, val);
+            }
         }
     }
 }

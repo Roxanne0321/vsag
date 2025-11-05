@@ -19,19 +19,25 @@
 
 namespace vsag {
 SindiParameters
-SindiParameters::FromJson(JsonType& sparse_ipivf_param_obj, IndexCommonParam index_common_param) {
+SindiParameters::FromJson(JsonType& sindi_param_obj, IndexCommonParam index_common_param) {
     SindiParameters obj;
 
-    if (sparse_ipivf_param_obj.contains(SINDI_LAMBDA)) {
-        obj.lambda = sparse_ipivf_param_obj[SINDI_LAMBDA];
+    if (sindi_param_obj.contains(SINDI_LAMBDA)) {
+        obj.lambda = sindi_param_obj[SINDI_LAMBDA];
     }
 
-    if (sparse_ipivf_param_obj.contains(SINDI_ALPHA)) {
-        obj.alpha = sparse_ipivf_param_obj[SINDI_ALPHA];
+    if (sindi_param_obj.contains(SINDI_ALPHA)) {
+        obj.alpha = sindi_param_obj[SINDI_ALPHA];
     }
-    
-    if (sparse_ipivf_param_obj.contains(PRUNE_STRAGY)) {
-        obj.prune_stragy = sparse_ipivf_param_obj[PRUNE_STRAGY];
+
+    if (sindi_param_obj.contains(PRUNE_STRAGY)) {
+        std::string strategy_str = sindi_param_obj[PRUNE_STRAGY];
+
+        if (strategy_str == "FixedRatio") {
+            obj.prune_stragy = PruneStrategy::FixedRatio;
+        } else if (strategy_str == "MassRatio") {
+            obj.prune_stragy = PruneStrategy::MassRatio;
+        }
     }
 
     return obj;
@@ -44,10 +50,9 @@ SindiSearchParameters::FromJson(const std::string& json_string) {
     SindiSearchParameters obj;
 
     if (!params.contains(INDEX_SINDI)) {
-        throw std::invalid_argument(
-            fmt::format("parameters must contains {}", INDEX_SINDI));
+        throw std::invalid_argument(fmt::format("parameters must contains {}", INDEX_SINDI));
     }
-    
+
     if (params[INDEX_SINDI].contains(SEARCH_NUM_THREADS)) {
         obj.num_threads = params[INDEX_SINDI][SEARCH_NUM_THREADS];
     }
