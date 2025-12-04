@@ -22,22 +22,14 @@ SparseTermDataCell::Query(float* global_dists, const SparseTermComputerPtr& comp
     while (computer->HasNextTerm()) {
         auto it = computer->NextTermIter();
         auto term = computer->GetTerm(it);
-        if (computer->HasNextTerm()) {
-            auto next_it = it + 1;
-            auto next_term = computer->GetTerm(next_it);
-            if (next_term >= term_ids_.size()) {
-                continue;
-            }
-            __builtin_prefetch(term_ids_[next_term].data(), 0, 3);
-            __builtin_prefetch(term_datas_[next_term].data(), 0, 3);
-        }
-        if (term >= term_ids_.size()) {
+        auto term_it = active_term_sizes_.find(term);
+        if (term_it == active_term_sizes_.end()) {
             continue;
         }
         computer->ScanForAccumulate(it,
-                                    term_ids_[term].data(),
-                                    term_datas_[term].data(),
-                                    static_cast<uint32_t>(static_cast<float>(term_sizes_[term]) *
+                                    term_ids_.at(term).data(),
+                                    term_datas_.at(term).data(),
+                                    static_cast<uint32_t>(static_cast<float>(term_it->second) *
                                                           computer->term_retain_ratio_),
                                     global_dists);
     }
@@ -67,17 +59,18 @@ SparseTermDataCell::InsertHeap(float* dists,
     while (computer->HasNextTerm()) {
         auto it = computer->NextTermIter();
         auto term = computer->GetTerm(it);
-        if (term >= term_ids_.size()) {
+        auto term_it = active_term_sizes_.find(term);
+        if (term_it == active_term_sizes_.end()) {
             continue;
         }
 
         uint32_t i = 0;
-        auto term_size = static_cast<uint32_t>(static_cast<float>(term_sizes_[term]) *
+        auto term_size = static_cast<uint32_t>(static_cast<float>(term_it->second) *
                                                computer->term_retain_ratio_);
         if constexpr (mode == InnerSearchMode::KNN_SEARCH) {
             if (heap.size() < n_candidate) {
                 for (; i < term_size; i++) {
-                    id = term_ids_[term][i];
+                    id = term_ids_.at(term)[i];
 
                     if constexpr (type == InnerSearchType::WITH_FILTER) {
                         if (not filter->CheckValid(id + offset_id)) {
@@ -100,7 +93,7 @@ SparseTermDataCell::InsertHeap(float* dists,
         }
 
         for (; i < term_size; i++) {
-            id = term_ids_[term][i];
+            id = term_ids_.at(term)[i];
 
             if constexpr (type == InnerSearchType::WITH_FILTER) {
 #if __cplusplus >= 202002L
@@ -160,7 +153,7 @@ SparseTermDataCell::DocPrune(Vector<std::pair<uint32_t, float>>& sorted_base) co
 
 void
 SparseTermDataCell::InsertVector(const SparseVector& sparse_base, uint32_t base_id) {
-    // resize term
+    // check term
     uint32_t max_term_id = 0;
     for (auto i = 0; i < sparse_base.len_; i++) {
         auto term_id = sparse_base.ids_[i];
@@ -172,8 +165,7 @@ SparseTermDataCell::InsertVector(const SparseVector& sparse_base, uint32_t base_
                         max_term_id,
                         term_id_limit_));
     }
-    ResizeTermList(max_term_id + 1);
-
+    
     Vector<std::pair<uint32_t, float>> sorted_base(allocator_);
     sort_sparse_vector(sparse_base, sorted_base);
 
@@ -184,30 +176,15 @@ SparseTermDataCell::InsertVector(const SparseVector& sparse_base, uint32_t base_
     for (auto& item : sorted_base) {
         auto term = item.first;
         auto val = item.second;
-        term_ids_[term].push_back(base_id);
-        term_datas_[term].push_back(val);
-        term_sizes_[term] += 1;
+
+        active_term_sizes_[term] += 1;
+
+        term_ids_.try_emplace(term, allocator_);
+        term_ids_.at(term).push_back(base_id);
+
+        term_datas_.try_emplace(term, allocator_);
+        term_datas_.at(term).push_back(val);
     }
-}
-
-void
-SparseTermDataCell::ResizeTermList(InnerIdType new_term_capacity) {
-    if (new_term_capacity <= term_capacity_) {
-        return;
-    }
-
-    Vector<Vector<uint32_t>> new_ids(new_term_capacity, Vector<uint32_t>(allocator_), allocator_);
-    Vector<Vector<float>> new_datas(new_term_capacity, Vector<float>(allocator_), allocator_);
-    Vector<uint32_t> new_sizes(new_term_capacity, 0, allocator_);
-
-    std::move(term_ids_.begin(), term_ids_.end(), new_ids.begin());
-    std::move(term_datas_.begin(), term_datas_.end(), new_datas.begin());
-    std::copy(term_sizes_.begin(), term_sizes_.end(), new_sizes.begin());
-
-    term_ids_.swap(new_ids);
-    term_datas_.swap(new_datas);
-    term_sizes_.swap(new_sizes);
-    term_capacity_ = new_term_capacity;
 }
 
 float
@@ -216,20 +193,12 @@ SparseTermDataCell::CalcDistanceByInnerId(const SparseTermComputerPtr& computer,
     while (computer->HasNextTerm()) {
         auto it = computer->NextTermIter();
         auto term = computer->GetTerm(it);
-        if (computer->HasNextTerm()) {
-            auto next_it = it + 1;
-            auto next_term = computer->GetTerm(next_it);
-            if (next_term >= term_ids_.size()) {
-                continue;
-            }
-            __builtin_prefetch(term_ids_[next_term].data(), 0, 3);
-            __builtin_prefetch(term_datas_[next_term].data(), 0, 3);
-        }
-        if (term >= term_ids_.size()) {
+        auto term_it = active_term_sizes_.find(term);
+        if (term_it == active_term_sizes_.end()) {
             continue;
         }
         computer->ScanForCalculateDist(
-            it, term_ids_[term].data(), term_datas_[term].data(), term_sizes_[term], base_id, &ip);
+            it, term_ids_.at(term).data(), term_datas_.at(term).data(), term_it->second, base_id, &ip);
     }
     computer->ResetTerm();
     return 1 + ip;
@@ -237,24 +206,32 @@ SparseTermDataCell::CalcDistanceByInnerId(const SparseTermComputerPtr& computer,
 
 void
 SparseTermDataCell::Serialize(StreamWriter& writer) const {
-    StreamWriter::WriteObj(writer, term_capacity_);
-    for (auto i = 0; i < term_capacity_; i++) {
-        StreamWriter::WriteVector(writer, term_ids_[i]);
-        StreamWriter::WriteVector(writer, term_datas_[i]);
+    uint32_t num_active_terms = active_term_sizes_.size();
+    StreamWriter::WriteObj(writer, num_active_terms);
+    for (auto &term_size : active_term_sizes_) {
+        uint32_t term = static_cast<uint32_t>(term_size.first);
+        uint32_t size = static_cast<uint32_t>(term_size.second);
+        StreamWriter::WriteObj(writer, term);
+        StreamWriter::WriteObj(writer, size);
+        StreamWriter::WriteVector(writer, term_ids_.at(term));
+        StreamWriter::WriteVector(writer, term_datas_.at(term));
     }
-    StreamWriter::WriteVector(writer, term_sizes_);
 }
 
 void
 SparseTermDataCell::Deserialize(StreamReader& reader) {
-    uint32_t term_capacity;
-    StreamReader::ReadObj(reader, term_capacity);
-    ResizeTermList(term_capacity);
-    for (auto i = 0; i < term_capacity_; i++) {
-        StreamReader::ReadVector(reader, term_ids_[i]);
-        StreamReader::ReadVector(reader, term_datas_[i]);
+    uint32_t num_active_terms;
+    StreamReader::ReadObj(reader, num_active_terms);
+    for (auto i = 0; i < num_active_terms; i++) {
+        uint32_t term, size;
+        StreamReader::ReadObj(reader, term);
+        StreamReader::ReadObj(reader, size);
+        active_term_sizes_[term] = size;
+        term_ids_.try_emplace(term, size, allocator_); 
+        term_datas_.try_emplace(term, size, allocator_); 
+        StreamReader::ReadVector(reader, term_ids_.at(term));
+        StreamReader::ReadVector(reader, term_datas_.at(term));
     }
-    StreamReader::ReadVector(reader, term_sizes_);
 }
 
 template void

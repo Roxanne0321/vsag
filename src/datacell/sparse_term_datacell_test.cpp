@@ -78,18 +78,19 @@ TEST_CASE("SparseTermDatacell Basic Test", "[ut][SparseTermDatacell]") {
     REQUIRE(computer->pruned_len_ == (1.0F - query_prune_ratio) * query_sv.len_);
 
     // test insert
-    auto exp_id_size = 19;
-    std::vector<uint32_t> exp_size = {0, 0, 0, 0, 0, 0, 0, 2, 3, 4, 4, 4, 4, 5, 5, 4, 3, 2, 1};
+    auto exp_id_size = 12;
+    std::unordered_map<uint32_t, uint32_t> exp_size = {{7, 2}, {8, 3}, {9, 4}, {10, 4}, {11, 4}, {12, 4}, {13, 5}, {14, 5}, {15, 4}, {16, 3}, {17, 2}, {18, 1}};
     for (auto i = 0; i < count_base; i++) {
         data_cell->InsertVector(sparse_vectors[i], i);
     }
-    REQUIRE(data_cell->term_capacity_ == exp_id_size);
     REQUIRE(data_cell->term_ids_.size() == exp_id_size);
     REQUIRE(data_cell->term_datas_.size() == exp_id_size);
-    for (auto i = 0; i < data_cell->term_capacity_; i++) {
-        REQUIRE(data_cell->term_ids_[i].size() == data_cell->term_sizes_[i]);
-        REQUIRE(data_cell->term_ids_[i].size() == exp_size[i]);
-        REQUIRE(data_cell->term_datas_[i].size() == exp_size[i]);
+    for (auto it : data_cell->active_term_sizes_) {
+        uint32_t term = it.first;
+        uint32_t size = it.second;
+        REQUIRE(data_cell->term_ids_.at(term).size() == size);
+        REQUIRE(data_cell->term_ids_.at(term).size() == exp_size[term]);
+        REQUIRE(data_cell->term_datas_.at(term).size() == exp_size[term]);
     }
 
     std::vector<float> exp_dists = {24, 34, 38, 42, 46, 50, 54, 58, 75, 80};

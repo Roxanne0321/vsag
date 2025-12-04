@@ -33,9 +33,9 @@ public:
         : doc_retain_ratio_(doc_retain_ratio),
           term_id_limit_(term_id_limit),
           allocator_(allocator),
-          term_ids_(0, Vector<uint32_t>(allocator), allocator),
-          term_datas_(0, Vector<float>(allocator), allocator),
-          term_sizes_(allocator) {
+          term_ids_(allocator),
+          term_datas_(allocator),
+          active_term_sizes_(allocator) {
     }
 
     void
@@ -57,9 +57,6 @@ public:
     InsertVector(const SparseVector& sparse_base, uint32_t base_id);
 
     void
-    ResizeTermList(InnerIdType new_term_capacity);
-
-    void
     Serialize(StreamWriter& writer) const;
 
     void
@@ -73,13 +70,11 @@ public:
 
     float doc_retain_ratio_{0};
 
-    uint32_t term_capacity_{0};
+    UnorderedMap<uint32_t, uint32_t> active_term_sizes_; // record active term ids and its sizes after pruning
 
-    Vector<Vector<uint32_t>> term_ids_;
+    UnorderedMap<uint32_t, Vector<uint32_t>> term_ids_;
 
-    Vector<Vector<float>> term_datas_;
-
-    Vector<uint32_t> term_sizes_;
+    UnorderedMap<uint32_t, Vector<float>> term_datas_;
 
     Allocator* const allocator_{nullptr};
 };

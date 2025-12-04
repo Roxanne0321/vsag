@@ -299,7 +299,6 @@ endif ()
 # sources
 add_subdirectory (src)
 add_subdirectory (mockimpl)
-add_subdirectory (/root/experiments)
 if (ENABLE_EXAMPLES)
     add_subdirectory (examples/cpp)
 endif ()
