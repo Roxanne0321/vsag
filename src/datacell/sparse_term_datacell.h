@@ -33,10 +33,20 @@ public:
         : doc_retain_ratio_(doc_retain_ratio),
           term_id_limit_(term_id_limit),
           allocator_(allocator),
-          term_ids_(0, Vector<uint32_t>(allocator), allocator),
-          term_datas_(0, Vector<float>(allocator), allocator),
+          term_ids_(allocator),
+          term_datas_(allocator),
           term_sizes_(allocator) {
     }
+
+    // ~SparseTermDataCell() {
+    //     for (auto& id : term_ids_) {
+    //         allocator_->Deallocate(id);
+    //     }
+
+    //     for (auto& data : term_datas_) {
+    //         allocator_->Deallocate(data);
+    //     }
+    // }
 
     void
     Query(float* global_dists, const SparseTermComputerPtr& computer) const;
@@ -78,9 +88,9 @@ public:
 
     uint32_t term_capacity_{0};
 
-    Vector<Vector<uint32_t>> term_ids_;
+    Vector<uint32_t*> term_ids_;
 
-    Vector<Vector<float>> term_datas_;
+    Vector<float*> term_datas_;
 
     Vector<uint32_t> term_sizes_;
 
