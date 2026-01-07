@@ -2,6 +2,7 @@
 #include <unordered_map>
 #include <vector>
 #include <iostream>
+#include <algorithm>
 
 #include "vsag/dataset.h"
 namespace vsag {
@@ -10,4 +11,7 @@ namespace vsag {
 
     float 
     SparseComputeIP(const SparseVector& sv1, const SparseVector& sv2);
+
+    std::vector<uint32_t>
+    mass_prune(const SparseVector& vec, float alpha);
 }

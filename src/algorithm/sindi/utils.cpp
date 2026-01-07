@@ -2,7 +2,8 @@
 
 namespace vsag {
 
-float DenseComputeIP(const std::vector<float> &query, const SparseVector& base) {
+float 
+DenseComputeIP(const std::vector<float> &query, const SparseVector& base) {
     const size_t N_LANES = 4;
     float result[N_LANES] = {0.0, 0.0, 0.0, 0.0};
     
@@ -42,5 +43,34 @@ SparseComputeIP(const SparseVector& sv1, const SparseVector& sv2) {
         }
     }
     return -sum;
+}
+
+std::vector<uint32_t>
+mass_prune(const SparseVector& vec, float alpha) {
+    float total_mass = 0.0f;
+    std::vector<uint32_t> indices(vec.dim_);
+    for (uint32_t i = 0; i < vec.dim_; ++i) {
+        indices[i] = i;
+        total_mass += vec.vals_[i];
+    }
+
+    if (alpha == 1) {
+        return indices;
+    }
+    std::sort(indices.begin(), indices.end(), [&](uint32_t a, uint32_t b) {
+        return vec.vals_[a] > vec.vals_[b];
+    });
+
+    float part_mass = total_mass * alpha;
+    float temp_mass = 0.0f;
+    int max_index = 0;
+    while (temp_mass < part_mass) {
+        temp_mass += vec.vals_[indices[max_index]];
+        max_index++;
+    }
+
+    indices.resize(max_index);
+
+    return indices;
 }
 }

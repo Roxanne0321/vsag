@@ -13,19 +13,15 @@
 // limitations under the License.
 
 #include "sindi.h"
-#if defined(ENABLE_AVX512)
-#include <immintrin.h>
-#endif
 #include <cstddef>
 #include <cstdint>
 #include <random>
 
 namespace vsag {
-Sindi::Sindi(const SindiParameters& param,
-                         const IndexCommonParam& index_common_param) {
+Sindi::Sindi(const SindiParameters& param, const IndexCommonParam& index_common_param) {
     alpha_ = param.alpha;
     lambda_ = param.lambda;
-    prune_stragy_ = param.prune_stragy;
+    use_reorder_ = param.use_reorder;
     allocator_ = index_common_param.allocator_;
 }
 
@@ -51,14 +47,16 @@ Sindi::serialize(std::ostream& out_stream) {
         }
     }
 
-    for (auto doc_id = 0; doc_id < total_count_; ++doc_id) {
-        out_stream.write(reinterpret_cast<const char*>(&data_[doc_id].dim_), sizeof(uint32_t));
+    if (use_reorder_) {
+        for (auto doc_id = 0; doc_id < total_count_; ++doc_id) {
+            out_stream.write(reinterpret_cast<const char*>(&data_[doc_id].dim_), sizeof(uint32_t));
 
-        if (data_[doc_id].dim_ > 0) {
-            out_stream.write(reinterpret_cast<const char*>(data_[doc_id].ids_),
-                             data_[doc_id].dim_ * sizeof(uint32_t));
-            out_stream.write(reinterpret_cast<const char*>(data_[doc_id].vals_),
-                             data_[doc_id].dim_ * sizeof(float));
+            if (data_[doc_id].dim_ > 0) {
+                out_stream.write(reinterpret_cast<const char*>(data_[doc_id].ids_),
+                                 data_[doc_id].dim_ * sizeof(uint32_t));
+                out_stream.write(reinterpret_cast<const char*>(data_[doc_id].vals_),
+                                 data_[doc_id].dim_ * sizeof(float));
+            }
         }
     }
 
@@ -84,22 +82,23 @@ Sindi::deserialize(std::istream& in_stream) {
             list.offsets_ = new uint32_t[sigma_ + 1];
             in_stream.read(reinterpret_cast<char*>(list.ids_), list.doc_num_ * sizeof(uint32_t));
             in_stream.read(reinterpret_cast<char*>(list.vals_), list.doc_num_ * sizeof(float));
-            in_stream.read(reinterpret_cast<char*>(list.offsets_),
-                           (sigma_ + 1) * sizeof(uint32_t));
+            in_stream.read(reinterpret_cast<char*>(list.offsets_), (sigma_ + 1) * sizeof(uint32_t));
         }
     }
 
-    data_ = new SparseVector[total_count_];
-    for (auto doc_id = 0; doc_id < total_count_; ++doc_id) {
-        in_stream.read(reinterpret_cast<char*>(&data_[doc_id].dim_), sizeof(uint32_t));
+    if (use_reorder_) {
+        data_ = new SparseVector[total_count_];
+        for (auto doc_id = 0; doc_id < total_count_; ++doc_id) {
+            in_stream.read(reinterpret_cast<char*>(&data_[doc_id].dim_), sizeof(uint32_t));
 
-        if (data_[doc_id].dim_ > 0) {
-            data_[doc_id].ids_ = new uint32_t[data_[doc_id].dim_];
-            data_[doc_id].vals_ = new float[data_[doc_id].dim_];
-            in_stream.read(reinterpret_cast<char*>(data_[doc_id].ids_),
-                           data_[doc_id].dim_ * sizeof(uint32_t));
-            in_stream.read(reinterpret_cast<char*>(data_[doc_id].vals_),
-                           data_[doc_id].dim_ * sizeof(float));
+            if (data_[doc_id].dim_ > 0) {
+                data_[doc_id].ids_ = new uint32_t[data_[doc_id].dim_];
+                data_[doc_id].vals_ = new float[data_[doc_id].dim_];
+                in_stream.read(reinterpret_cast<char*>(data_[doc_id].ids_),
+                               data_[doc_id].dim_ * sizeof(uint32_t));
+                in_stream.read(reinterpret_cast<char*>(data_[doc_id].vals_),
+                               data_[doc_id].dim_ * sizeof(float));
+            }
         }
     }
     return {};
@@ -111,7 +110,9 @@ Sindi::build(const DatasetPtr& base) {
     //// copy base dataset
     const SparseVector* sparse_ptr = base->GetSparseVectors();
     this->total_count_ = base->GetNumElements();
-    this->data_ = new SparseVector[this->total_count_];
+    if (use_reorder_) {
+        this->data_ = new SparseVector[this->total_count_];
+    }
     for (size_t i = 0; i < this->total_count_; ++i) {
         const SparseVector& sv = sparse_ptr[i];
         for (uint32_t j = 1; j < sv.dim_; ++j) {
@@ -122,11 +123,13 @@ Sindi::build(const DatasetPtr& base) {
             this->data_dim_ = sv.ids_[sv.dim_ - 1];
         }
 
-        this->data_[i].dim_ = sv.dim_;
-        this->data_[i].ids_ = new uint32_t[this->data_[i].dim_];
-        this->data_[i].vals_ = new float[this->data_[i].dim_];
-        memcpy(this->data_[i].ids_, sv.ids_, this->data_[i].dim_ * sizeof(uint32_t));
-        memcpy(this->data_[i].vals_, sv.vals_, this->data_[i].dim_ * sizeof(float));
+        if (use_reorder_) {
+            this->data_[i].dim_ = sv.dim_;
+            this->data_[i].ids_ = new uint32_t[this->data_[i].dim_];
+            this->data_[i].vals_ = new float[this->data_[i].dim_];
+            memcpy(this->data_[i].ids_, sv.ids_, this->data_[i].dim_ * sizeof(uint32_t));
+            memcpy(this->data_[i].vals_, sv.vals_, this->data_[i].dim_ * sizeof(float));
+        }
     }
 
     this->data_dim_ += 1;
@@ -134,90 +137,25 @@ Sindi::build(const DatasetPtr& base) {
     ivf_mutex = std::vector<std::mutex>(this->data_dim_);
     std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>> word_map;
 
-    vector_prune(word_map);
+    vector_prune(sparse_ptr, word_map);
 
     build_inverted_lists(word_map);
 
     return {};
 }
 
-std::vector<uint32_t>
-fixed_prune(const SparseVector& vec, float alpha) {
-    std::vector<uint32_t> indices(vec.dim_);
-    for (uint32_t i = 0; i < vec.dim_; ++i) {
-        indices[i] = i;
-    }
-
-    if (alpha == 1) {
-        return indices;
-    }
-
-    std::sort(
-        indices.begin(), indices.end(), [&](uint32_t a, uint32_t b) {
-            return vec.vals_[a] > vec.vals_[b];
-        });
-
-    uint32_t retained_length = static_cast<uint32_t>(static_cast<float>(vec.dim_) * alpha);
-    indices.resize(retained_length);
-
-    return indices;
-}
-
-std::vector<uint32_t>
-mass_prune(const SparseVector& vec, float alpha) {
-    float total_mass = 0.0f;
-    std::vector<uint32_t> indices(vec.dim_);
-    for (uint32_t i = 0; i < vec.dim_; ++i) {
-        indices[i] = i;
-        total_mass += vec.vals_[i];
-    }
-
-    if (alpha == 1) {
-        return indices;
-    }
-    std::sort(
-        indices.begin(), indices.end(), [&](uint32_t a, uint32_t b) {
-            return vec.vals_[a] > vec.vals_[b];
-        });
-
-    float part_mass = total_mass * alpha;
-    float temp_mass = 0.0f;
-    int max_index = 0;
-    while(temp_mass < part_mass) {
-        temp_mass += vec.vals_[indices[max_index]];
-        max_index ++;
-    }
-
-    indices.resize(max_index);
-
-    return indices;
-}
-
 void
-Sindi::vector_prune(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map) {
-    if (prune_stragy_ == PruneStrategy::FixedRatio) {
-        for (size_t i = 0; i < this->total_count_; ++i) {
-            const SparseVector& sv = data_[i];
-            std::vector<uint32_t> retained_ids = fixed_prune(sv, alpha_);
+Sindi::vector_prune(
+    const SparseVector* sparse_ptr,
+    std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map) {
+    for (size_t i = 0; i < this->total_count_; ++i) {
+        const SparseVector& sv = sparse_ptr[i];
+        std::vector<uint32_t> retained_ids = mass_prune(sv, alpha_);
 
-            for (auto j = 0; j < retained_ids.size(); j++) {
-                uint32_t word_id = sv.ids_[retained_ids[j]];
-                float val = sv.vals_[retained_ids[j]];
-                word_map[word_id].emplace_back(i, val);
-            }
-        }
-    }
-    else if (prune_stragy_ == PruneStrategy::MassRatio) {
-        std::cout << "mass prune" << std::endl;
-        for (size_t i = 0; i < this->total_count_; ++i) {
-            const SparseVector& sv = data_[i];
-            std::vector<uint32_t> retained_ids = mass_prune(sv, alpha_);
-
-            for (auto j = 0; j < retained_ids.size(); j++) {
-                uint32_t word_id = sv.ids_[retained_ids[j]];
-                float val = sv.vals_[retained_ids[j]];
-                word_map[word_id].emplace_back(i, val);
-            }
+        for (auto j = 0; j < retained_ids.size(); j++) {
+            uint32_t word_id = sv.ids_[retained_ids[j]];
+            float val = sv.vals_[retained_ids[j]];
+            word_map[word_id].emplace_back(i, val);
         }
     }
 }
@@ -267,13 +205,16 @@ Sindi::build_inverted_lists(
 
 DatasetPtr
 Sindi::knn_search(const DatasetPtr& query,
-                        int64_t k,
-                        const std::string& parameters,
-                        const std::function<bool(int64_t)>& filter) const {
+                  int64_t k,
+                  const std::string& parameters,
+                  const std::function<bool(int64_t)>& filter) const {
     auto params = SindiSearchParameters::FromJson(parameters);
     this->num_threads_ = params.num_threads;
     this->beta_ = params.beta;
     this->gamma_ = params.gamma;
+    if (params.gamma < k) {
+        this->gamma_ = k;
+    }
 
     uint32_t query_num = query->GetNumElements();
     auto dataset_results = Dataset::Make();
@@ -297,10 +238,10 @@ Sindi::knn_search(const DatasetPtr& query,
 
 void
 Sindi::search_one_query(const SparseVector& query_vector,
-                              int64_t k,
-                              int64_t* res_ids,
-                              float* res_dists,
-                              std::vector<float>& win_dists) const {
+                        int64_t k,
+                        int64_t* res_ids,
+                        float* res_dists,
+                        std::vector<float>& win_dists) const {
     int n = query_vector.dim_ * beta_;
     std::vector<std::pair<uint32_t, float>> elements(query_vector.dim_);
     std::vector<float> query_dense(data_dim_);
@@ -323,65 +264,113 @@ Sindi::search_one_query(const SparseVector& query_vector,
 
     accumulation_scan(elements, heap, win_dists);
 
-    reorder(query_dense, heap, k, res_ids, res_dists);
+    if (use_reorder_) {
+        reorder(query_dense, heap, k, res_ids, res_dists);
+    } else {
+        for (auto j = static_cast<int64_t>(heap.size() - 1); j >= 0; --j) {
+            res_dists[j] = -heap.top().first;
+            res_ids[j] = heap.top().second;
+            heap.pop();
+        }
+    }
 }
 
 void
 Sindi::accumulation_scan(std::vector<std::pair<uint32_t, float>>& query_vector,
-                               MaxHeap& heap,
-                               std::vector<float>& dists) const {
+                         MaxHeap& heap,
+                         std::vector<float>& dists) const {
     float cur_heap_top = std::numeric_limits<float>::max();
 
     for (auto window_index = 0; window_index < sigma_; ++window_index) {
         uint32_t start = window_index * lambda_;
-        for (auto term_index = 0; term_index < query_vector.size(); term_index++) {
-            float query_val = -query_vector[term_index].second;
-            auto term_id = query_vector[term_index].first;
-            const InvertedList& list = inverted_lists_[term_id];
-            if (list.doc_num_ == 0) [[unlikely]] {
-                continue;
-            }
-            for (auto doc_id_index = list.offsets_[window_index];
-                 doc_id_index < list.offsets_[window_index + 1];
-                 ++doc_id_index) {
-                auto doc_id = list.ids_[doc_id_index];
-                dists[doc_id - start] += list.vals_[doc_id_index] * query_val;
-            }
+        accumulation(query_vector, start, window_index, dists);
+        if (!use_reorder_) {
+            enqueue_scan_dist(start, heap, dists, cur_heap_top);
+        } else {
+            enqueue_scan_list(query_vector, start, window_index, heap, dists, cur_heap_top);
         }
+    }
+}
 
-        for (auto term_index = 0; term_index < query_vector.size(); term_index++) {
-            auto term_id = query_vector[term_index].first;
-            const InvertedList& list = inverted_lists_[term_id];
-            if (list.doc_num_ == 0) [[unlikely]] {
+void
+Sindi::accumulation(const std::vector<std::pair<uint32_t, float>>& query_vector,
+                    uint32_t start,
+                    uint32_t window_index,
+                    std::vector<float>& dists) const {
+    for (auto term_index = 0; term_index < query_vector.size(); term_index++) {
+        float query_val = -query_vector[term_index].second;
+        auto term_id = query_vector[term_index].first;
+        const InvertedList& list = inverted_lists_[term_id];
+        if (list.doc_num_ == 0) [[unlikely]] {
+            continue;
+        }
+        for (auto doc_id_index = list.offsets_[window_index];
+             doc_id_index < list.offsets_[window_index + 1];
+             ++doc_id_index) {
+            auto doc_id = list.ids_[doc_id_index];
+            dists[doc_id - start] += list.vals_[doc_id_index] * query_val;
+        }
+    }
+}
+
+void
+Sindi::enqueue_scan_list(const std::vector<std::pair<uint32_t, float>>& query_vector,
+                         uint32_t start,
+                         uint32_t window_index,
+                         MaxHeap& heap,
+                         std::vector<float>& dists,
+                         float& cur_heap_top) const {
+    for (auto term_index = 0; term_index < query_vector.size(); term_index++) {
+        auto term_id = query_vector[term_index].first;
+        const InvertedList& list = inverted_lists_[term_id];
+        if (list.doc_num_ == 0) [[unlikely]] {
+            continue;
+        }
+        for (auto doc_id_index = list.offsets_[window_index];
+             doc_id_index < list.offsets_[window_index + 1];
+             ++doc_id_index) {
+            auto doc_id = list.ids_[doc_id_index];
+            auto temp_id = doc_id - start;
+            if (dists[temp_id] >= cur_heap_top) [[likely]] {
+                dists[temp_id] = 0;
                 continue;
+            } else {
+                heap.emplace(dists[temp_id], doc_id);
             }
-            for (auto doc_id_index = list.offsets_[window_index];
-                 doc_id_index < list.offsets_[window_index + 1];
-                 ++doc_id_index) {
-                auto doc_id = list.ids_[doc_id_index];
-                auto temp_id = doc_id - start;
-                if (dists[temp_id] >= cur_heap_top) [[likely]] {
-                    dists[temp_id] = 0;
-                    continue;
-                } else {
-                    heap.emplace(dists[temp_id], doc_id);
-                }
+            if (heap.size() > gamma_) {
+                heap.pop();
+            }
+            cur_heap_top = heap.top().first;
+            dists[temp_id] = 0;
+        }
+    }
+}
+
+void
+Sindi::enqueue_scan_dist(uint32_t start,
+                         MaxHeap& heap,
+                         std::vector<float>& dists,
+                         float& cur_heap_top) const {
+    for (uint32_t i = 0; i < lambda_; ++i) {
+        if (dists[i] != 0) {
+            if (dists[i] < cur_heap_top) {
+                heap.emplace(dists[i], start + i);
                 if (heap.size() > gamma_) {
                     heap.pop();
                 }
                 cur_heap_top = heap.top().first;
-                dists[temp_id] = 0;
             }
+            dists[i] = 0;
         }
     }
 }
 
 void
 Sindi::reorder(const std::vector<float>& query_dense,
-                     MaxHeap& heap,
-                     int64_t k,
-                     int64_t* res_ids,
-                     float* res_dists) const {
+               MaxHeap& heap,
+               int64_t k,
+               int64_t* res_ids,
+               float* res_dists) const {
     MaxHeap final_heap(this->allocator_.get());
     float cur_heap_top = std::numeric_limits<float>::max();
 

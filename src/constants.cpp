@@ -131,5 +131,6 @@ const char* const SINDI_LAMBDA = "lambda";
 const char* const SINDI_ALPHA = "alpha";
 const char* const SINDI_BETA = "beta";
 const char* const SINDI_GAMMA = "gamma";
+const char* const SINDI_USE_REORDER = "use_reorder";
 const char* const PRUNE_STRAGY =  "prune_stragy";
 };  // namespace vsag

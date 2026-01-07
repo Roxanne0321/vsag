@@ -29,16 +29,14 @@ SindiParameters::FromJson(JsonType& sindi_param_obj, IndexCommonParam index_comm
     if (sindi_param_obj.contains(SINDI_ALPHA)) {
         obj.alpha = sindi_param_obj[SINDI_ALPHA];
     }
-
-    if (sindi_param_obj.contains(PRUNE_STRAGY)) {
-        std::string strategy_str = sindi_param_obj[PRUNE_STRAGY];
-
-        if (strategy_str == "FixedRatio") {
-            obj.prune_stragy = PruneStrategy::FixedRatio;
-        } else if (strategy_str == "MassRatio") {
-            obj.prune_stragy = PruneStrategy::MassRatio;
-        }
+    if (sindi_param_obj.contains(SINDI_USE_REORDER)) {
+        obj.use_reorder = sindi_param_obj[SINDI_USE_REORDER];
     }
+
+    CHECK_ARGUMENT(obj.lambda >= 10000 && obj.lambda <= 100000,
+                   fmt::format("{} must be in range [10000, 100000]", SINDI_LAMBDA));
+    CHECK_ARGUMENT(obj.alpha >= 0.0f && obj.alpha <= 1.0f,
+                   fmt::format("{} must be in range [0, 1]", SINDI_ALPHA));
 
     return obj;
 }
@@ -59,6 +57,8 @@ SindiSearchParameters::FromJson(const std::string& json_string) {
     if (params[INDEX_SINDI].contains(SINDI_BETA)) {
         obj.beta = params[INDEX_SINDI][SINDI_BETA];
     }
+    CHECK_ARGUMENT(obj.beta >= 0.0f && obj.beta <= 1.0f,
+                   fmt::format("{} must be in range [0, 1]", SINDI_BETA));
     if (params[INDEX_SINDI].contains(SINDI_GAMMA)) {
         obj.gamma = params[INDEX_SINDI][SINDI_GAMMA];
     }

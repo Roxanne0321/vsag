@@ -164,7 +164,8 @@ private:
     build(const DatasetPtr& data);
 
     void
-    vector_prune(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
+    vector_prune(const SparseVector* sparse_ptr,
+                 std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
 
     void
     build_inverted_lists(std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, float>>>& word_map);
@@ -187,6 +188,26 @@ private:
                       MaxHeap &heap,
                       std::vector<float>& dists) const;
     
+    void
+    accumulation(const std::vector<std::pair<uint32_t, float>>& query_vector,
+                 uint32_t start,
+                 uint32_t window_index,
+                 std::vector<float>& dists) const;
+
+    void
+    enqueue_scan_list(const std::vector<std::pair<uint32_t, float>>& query_vector,
+                      uint32_t start,
+                      uint32_t window_index,
+                      MaxHeap& heap,
+                      std::vector<float>& dists,
+                      float& cur_heap_top) const;
+    
+    void
+    enqueue_scan_dist(uint32_t start,
+                      MaxHeap& heap,
+                      std::vector<float>& dists,
+                      float& cur_heap_top) const;
+
     void
     reorder(const std::vector<float> &query_dense,
                      MaxHeap &heap,
@@ -223,8 +244,8 @@ private:
     // build parameters
     uint32_t lambda_;
     uint32_t sigma_; 
-    float alpha_;    
-    PruneStrategy prune_stragy_;
+    float alpha_;
+    bool use_reorder_{true};
 
     // search parameters
     mutable int num_threads_;
