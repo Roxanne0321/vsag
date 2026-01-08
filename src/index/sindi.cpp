@@ -352,16 +352,17 @@ Sindi::enqueue_scan_dist(uint32_t start,
                          std::vector<float>& dists,
                          float& cur_heap_top) const {
     for (uint32_t i = 0; i < lambda_; ++i) {
-        if (dists[i] != 0) {
-            if (dists[i] < cur_heap_top) {
-                heap.emplace(dists[i], start + i);
-                if (heap.size() > gamma_) {
-                    heap.pop();
-                }
-                cur_heap_top = heap.top().first;
+        if (dists[i] >= cur_heap_top) [[likely]] {
+                dists[i] = 0;
+                continue;
+            } else {
+                heap.emplace(dists[i], i + start);
             }
+            if (heap.size() > gamma_) {
+                heap.pop();
+            }
+            cur_heap_top = heap.top().first;
             dists[i] = 0;
-        }
     }
 }
 
