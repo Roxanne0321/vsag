@@ -47,7 +47,7 @@ public:
             delete[] this->inverted_lists_;
         }
 
-        if (this->data_) {
+        if (use_reorder_) {
             for (auto i = 0; i < total_count_; ++i) {
                 if (data_[i].dim_ != 0) {
                     delete[] data_[i].ids_;
