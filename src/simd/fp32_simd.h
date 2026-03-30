@@ -27,7 +27,12 @@ FP32ComputeIP(const float* query, const float* codes, uint64_t dim);
 float
 FP32ComputeL2Sqr(const float* query, const float* codes, uint64_t dim);
 void
-FP32ComputeSIP(const float* q_vals, const float* codes, float* product_data, uint64_t dim);
+FP32SparseAccumulate(float* dists,
+                     const uint32_t* ids,
+                     const float* vals,
+                     float query_val,
+                     uint32_t num,
+                     uint32_t start_id);
 }  // namespace generic
 
 namespace sse {
@@ -35,6 +40,13 @@ float
 FP32ComputeIP(const float* query, const float* codes, uint64_t dim);
 float
 FP32ComputeL2Sqr(const float* query, const float* codes, uint64_t dim);
+void
+FP32SparseAccumulate(float* dists,
+                     const uint32_t* ids,
+                     const float* vals,
+                     float query_val,
+                     uint32_t num,
+                     uint32_t start_id);
 }  // namespace sse
 
 namespace avx {
@@ -42,6 +54,13 @@ float
 FP32ComputeIP(const float* query, const float* codes, uint64_t dim);
 float
 FP32ComputeL2Sqr(const float* query, const float* codes, uint64_t dim);
+void
+FP32SparseAccumulate(float* dists,
+                     const uint32_t* ids,
+                     const float* vals,
+                     float query_val,
+                     uint32_t num,
+                     uint32_t start_id);
 }  // namespace avx
 
 namespace avx2 {
@@ -49,6 +68,13 @@ float
 FP32ComputeIP(const float* query, const float* codes, uint64_t dim);
 float
 FP32ComputeL2Sqr(const float* query, const float* codes, uint64_t dim);
+void
+FP32SparseAccumulate(float* dists,
+                     const uint32_t* ids,
+                     const float* vals,
+                     float query_val,
+                     uint32_t num,
+                     uint32_t start_id);
 }  // namespace avx2
 
 namespace avx512 {
@@ -57,14 +83,24 @@ FP32ComputeIP(const float* query, const float* codes, uint64_t dim);
 float
 FP32ComputeL2Sqr(const float* query, const float* codes, uint64_t dim);
 void
-FP32ComputeSIP(const float* q_vals, const float* codes, float* product_data, uint64_t dim);
+FP32SparseAccumulate(float* dists,
+                     const uint32_t* ids,
+                     const float* vals,
+                     float query_val,
+                     uint32_t num,
+                     uint32_t start_id);
 }  // namespace avx512
 
 using FP32ComputeType = float (*)(const float* query, const float* codes, uint64_t dim);
 extern FP32ComputeType FP32ComputeIP;
 extern FP32ComputeType FP32ComputeL2Sqr;
 
-using FP32SparseComputeType = void (*)(const float* query, const float* codes, float* product_data, uint64_t dim);
-extern FP32SparseComputeType FP32ComputeSIP;
+using FP32SparseAccumulateType = void (*)(float* dists,
+                                          const uint32_t* ids,
+                                          const float* vals,
+                                          float query_val,
+                                          uint32_t num,
+                                          uint32_t start_id);
+extern FP32SparseAccumulateType FP32SparseAccumulate;
 
 }  // namespace vsag

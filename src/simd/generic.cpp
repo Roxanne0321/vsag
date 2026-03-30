@@ -96,9 +96,14 @@ FP32ComputeL2Sqr(const float* query, const float* codes, uint64_t dim) {
 }
 
 void
-FP32ComputeSIP(const float* q_vals, const float* codes, float* product_data, uint64_t dim) {
-    for (uint64_t i = 0; i < dim; ++i) {
-        product_data[i] = q_vals[0] * codes[i];
+FP32SparseAccumulate(float* dists,
+                     const uint32_t* ids,
+                     const float* vals,
+                     float query_val,
+                     uint32_t num,
+                     uint32_t start_id) {
+    for (uint32_t i = 0; i < num; ++i) {
+        dists[ids[i] - start_id] += vals[i] * query_val;
     }
 }
 

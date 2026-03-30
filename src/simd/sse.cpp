@@ -131,6 +131,43 @@ FP32ComputeL2Sqr(const float* query, const float* codes, uint64_t dim) {
 #endif
 }
 
+void
+FP32SparseAccumulate(float* dists,
+                     const uint32_t* ids,
+                     const float* vals,
+                     float query_val,
+                     uint32_t num,
+                     uint32_t start_id) {
+#if defined(ENABLE_SSE)
+    __m128 q_vec = _mm_set1_ps(query_val);
+    __m128i start_vec = _mm_set1_epi32(start_id);
+    uint32_t i = 0;
+    for (; i + 4 <= num; i += 4) {
+        __m128 val_vec = _mm_loadu_ps(vals + i);
+        __m128 delta_vec = _mm_mul_ps(val_vec, q_vec);
+
+        __m128i id_vec = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ids + i));
+        __m128i idx_vec = _mm_sub_epi32(id_vec, start_vec);
+
+        alignas(16) float res[4];
+        alignas(16) int32_t indices[4];
+        _mm_store_ps(res, delta_vec);
+        _mm_store_si128(reinterpret_cast<__m128i*>(indices), idx_vec);
+
+        for (int k = 0; k < 4; ++k) {
+            dists[indices[k]] += res[k];
+        }
+    }
+    for (; i < num; ++i) {
+        dists[ids[i] - start_id] += vals[i] * query_val;
+    }
+#else
+    for (uint32_t i = 0; i < num; ++i) {
+        dists[ids[i] - start_id] += vals[i] * query_val;
+    }
+#endif
+}
+
 float
 SQ8ComputeIP(const float* query,
              const uint8_t* codes,

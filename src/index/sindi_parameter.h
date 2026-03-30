@@ -26,7 +26,7 @@ public:
 
 public:
     float alpha{1};
-    uint32_t lambda{1};
+    uint32_t lambda{100000};
     bool use_reorder{true};
 
 protected:

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "sindi.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <random>
@@ -179,7 +180,7 @@ Sindi::build_inverted_lists(
                       doc_infos.end(),
                       [](const std::pair<uint32_t, float>& a, const std::pair<uint32_t, float>& b) {
                           return a.first < b.first;
-                      });
+                                     });
             uint32_t doc_num = static_cast<uint32_t>(doc_infos.size());
             this->inverted_lists_[i].doc_num_ = doc_num;
             this->inverted_lists_[i].ids_ = new uint32_t[doc_num];
@@ -304,12 +305,10 @@ Sindi::accumulation(const std::vector<std::pair<uint32_t, float>>& query_vector,
         if (list.doc_num_ == 0) [[unlikely]] {
             continue;
         }
-        for (auto doc_id_index = list.offsets_[window_index];
-             doc_id_index < list.offsets_[window_index + 1];
-             ++doc_id_index) {
-            auto doc_id = list.ids_[doc_id_index];
-            dists[doc_id - start] += list.vals_[doc_id_index] * query_val;
-        }
+        uint32_t count = list.offsets_[window_index + 1] - list.offsets_[window_index];
+        uint32_t offset = list.offsets_[window_index];
+        FP32SparseAccumulate(
+            dists.data(), list.ids_ + offset, list.vals_ + offset, query_val, count, start);
     }
 }
 
@@ -353,16 +352,16 @@ Sindi::enqueue_scan_dist(uint32_t start,
                          float& cur_heap_top) const {
     for (uint32_t i = 0; i < lambda_; ++i) {
         if (dists[i] >= cur_heap_top) [[likely]] {
-                dists[i] = 0;
-                continue;
-            } else {
-                heap.emplace(dists[i], i + start);
-            }
-            if (heap.size() > gamma_) {
-                heap.pop();
-            }
-            cur_heap_top = heap.top().first;
             dists[i] = 0;
+            continue;
+        } else {
+            heap.emplace(dists[i], i + start);
+        }
+        if (heap.size() > gamma_) {
+            heap.pop();
+        }
+        cur_heap_top = heap.top().first;
+        dists[i] = 0;
     }
 }
 

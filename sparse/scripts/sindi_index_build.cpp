@@ -55,20 +55,22 @@ read_sparse_vectors_from_csr_file(const std::string& filename) {
 }
 
 int main(int argc, char** argv) {
-    if (argc != 5) {
+    if (argc != 6) {
         std::cerr << "Usage: " << argv[0]
-                  << " <basefile> <lambda> <alpha> <index_path>\n";
+                  << " <basefile> <lambda> <alpha> <use_reorder> <index_path>\n";
         return 1;
     }
 
     std::string basefile = argv[1];
     int lambda = std::stoi(argv[2]);
     float alpha = std::stof(argv[3]);
-    std::string index_path = argv[4];
+    bool use_reorder = std::stoi(argv[4]) != 0;
+    std::string index_path = argv[5];
 
     std::cout << "basefile: " << basefile << "\n";
     std::cout << "lambda: " << lambda << "\n";
     std::cout << "alpha: " << alpha << "\n";
+    std::cout << "use_reorder: " << use_reorder << "\n";
     std::cout << "index_path: " << index_path << "\n";
 
     std::pair<vsag::SparseVector*, int64_t> base_results = read_sparse_vectors_from_csr_file(basefile);
@@ -84,7 +86,7 @@ int main(int argc, char** argv) {
             {"sindi",
              {{"lambda", lambda},
               {"alpha", alpha},
-              {"prune_stragy", "MassRatio"}}}};
+              {"use_reorder", use_reorder}}}};
 
     std::cout << "Start building sindi index" << std::endl;
     auto index =

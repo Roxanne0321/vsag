@@ -25,7 +25,7 @@
 
 #include "common.h"
 #include "safe_allocator.h"
-#include "simd/fp32_simd.h"
+#include "simd/simd.h"
 #include "sindi_parameter.h"
 #include "typing.h"
 #include "vsag/index.h"

@@ -140,6 +140,35 @@ FP32ComputeL2Sqr(const float* query, const float* codes, uint64_t dim) {
 #endif
 }
 
+void
+FP32SparseAccumulate(float* dists,
+                     const uint32_t* ids,
+                     const float* vals,
+                     float query_val,
+                     uint32_t num,
+                     uint32_t start_id) {
+#if defined(ENABLE_AVX)
+    __m256 q_vec = _mm256_set1_ps(query_val);
+    uint32_t i = 0;
+    for (; i + 8 <= num; i += 8) {
+        __m256 val_vec = _mm256_loadu_ps(vals + i);
+        __m256 delta_vec = _mm256_mul_ps(val_vec, q_vec);
+
+        alignas(32) float res[8];
+        _mm256_store_ps(res, delta_vec);
+
+        for (int k = 0; k < 8; ++k) {
+            dists[ids[i + k] - start_id] += res[k];
+        }
+    }
+    for (; i < num; ++i) {
+        dists[ids[i] - start_id] += vals[i] * query_val;
+    }
+#else
+    generic::FP32SparseAccumulate(dists, ids, vals, query_val, num, start_id);
+#endif
+}
+
 float
 SQ8ComputeIP(const float* query,
              const uint8_t* codes,

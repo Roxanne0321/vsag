@@ -108,23 +108,77 @@ FP32ComputeIP(const float* query, const float* codes, uint64_t dim) {
 #endif
 }
 
+// ============================================================================
+// AVX512 SIMD Implementation (16-wide vectorization with hardware scatter)
+// ============================================================================
+// Accumulates contributions from a single posting list for IP metric
+// dists[doc_ids[i] - start_id] += query_val * doc_vals[i] for all i in [start, start_num)
+//
+// TODO: Future optimization - pipelined gathers
+// Moving gathers earlier (gather0, gather1, then compute0, scatter0, compute1, scatter1)
+// could hide ~15-20 cycle gather latency and provide 1.3-1.5x speedup.
 void
-FP32ComputeSIP(const float* q_vals, const float* codes, float* product_data, uint64_t dim) {
+FP32SparseAccumulate(float* dists,
+                     const uint32_t* doc_ids,
+                     const float* doc_vals,
+                     float query_val,
+                     uint32_t num,
+                     uint32_t start_id) {
 #if defined(ENABLE_AVX512)
-    const uint64_t n = dim / 16;
-    __m512 q_vec, code_vec, result_vec;
+    constexpr size_t SIMD_WIDTH = 16;  // AVX512 processes 16 floats
+    size_t j = 0;
 
-    for (uint64_t i = 0; i < n; ++i) {
-        q_vec = _mm512_set1_ps(q_vals[0]);     // 从内存加载 16 个 query 浮点数
-        code_vec = _mm512_loadu_ps(codes + i * 16);   // 从内存加载 16 个 codes 浮点数
-        result_vec = _mm512_mul_ps(q_vec, code_vec);  // 执行乘法运算
-        _mm512_storeu_ps(product_data + i * 16, result_vec); // 存储结果到 product 数组
+    float* dists_shifted = dists - start_id;
+
+    // Broadcast q_weight to all 16 lanes once before the loops
+    __m512 q_weight_vec = _mm512_set1_ps(query_val);
+
+    // 2x unrolled SIMD loop to hide gather/scatter latency
+    for (; j + 2 * SIMD_WIDTH <= num; j += 2 * SIMD_WIDTH) {
+        _mm_prefetch((const char*)&doc_vals[j + 128], _MM_HINT_T0);
+        _mm_prefetch((const char*)&doc_ids[j + 128], _MM_HINT_T0);
+        _mm_prefetch((const char*)&doc_vals[j + 144], _MM_HINT_T0);
+        _mm_prefetch((const char*)&doc_ids[j + 144], _MM_HINT_T0);
+
+        // Chunk 0: elements [j, j+16)
+        __m512 vals0 = _mm512_loadu_ps(&doc_vals[j]);
+        __m512i doc_ids0 = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(&doc_ids[j]));
+
+        // Chunk 1: elements [j+16, j+32)
+        __m512 vals1 = _mm512_loadu_ps(&doc_vals[j + SIMD_WIDTH]);
+        __m512i doc_ids1 = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(&doc_ids[j + SIMD_WIDTH]));
+
+        // Process chunk 0: new_score = current_score + val * q_weight (FMA)
+        __m512 current_scores0 = _mm512_i32gather_ps(doc_ids0, dists_shifted, sizeof(float));
+        __m512 new_scores0 = _mm512_fmadd_ps(vals0, q_weight_vec, current_scores0);
+        _mm512_i32scatter_ps(dists_shifted, doc_ids0, new_scores0, sizeof(float));
+
+        // Process chunk 1: new_score = current_score + val * q_weight (FMA)
+        __m512 current_scores1 = _mm512_i32gather_ps(doc_ids1, dists_shifted, sizeof(float));
+        __m512 new_scores1 = _mm512_fmadd_ps(vals1, q_weight_vec, current_scores1);
+        _mm512_i32scatter_ps(dists_shifted, doc_ids1, new_scores1, sizeof(float));
     }
 
-    // 处理剩余不足 16 个的部分
-    for (uint64_t i = n * 16; i < dim; ++i) {
-        product_data[i] = q_vals[0] * codes[i];
+    // Handle remaining 16-31 elements
+    for (; j + SIMD_WIDTH <= num; j += SIMD_WIDTH) {
+        __m512 vals = _mm512_loadu_ps(&doc_vals[j]);
+        __m512i doc_ids_vec = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(&doc_ids[j]));
+        __m512 current_scores = _mm512_i32gather_ps(doc_ids_vec, dists_shifted, sizeof(float));
+        __m512 new_scores = _mm512_fmadd_ps(vals, q_weight_vec, current_scores);
+        _mm512_i32scatter_ps(dists_shifted, doc_ids_vec, new_scores, sizeof(float));
     }
+
+    // Masked tail: handle remaining 0-15 elements in SIMD mode instead of scalar
+    if (j < num) {
+        __mmask16 mask = (1u << (num - j)) - 1;  // Enable only valid lanes
+        __m512 vals = _mm512_maskz_loadu_ps(mask, &doc_vals[j]);
+        __m512i doc_ids_vec = _mm512_maskz_loadu_epi32(mask, &doc_ids[j]);
+        __m512 current_scores = _mm512_mask_i32gather_ps(_mm512_setzero_ps(), mask, doc_ids_vec, dists_shifted, sizeof(float));
+        __m512 new_scores = _mm512_fmadd_ps(vals, q_weight_vec, current_scores);
+        _mm512_mask_i32scatter_ps(dists_shifted, mask, doc_ids_vec, new_scores, sizeof(float));
+    }
+#else
+    generic::FP32SparseAccumulate(dists, doc_ids, doc_vals, query_val, num, start_id);
 #endif
 }
 
@@ -398,7 +452,7 @@ SQ8UniformComputeCodesIP(const uint8_t* codes1, const uint8_t* codes2, uint64_t 
 
 void
 DivScalar(const float* from, float* to, uint64_t dim, float scalar) {
-#if defined(ENABLE_AVX2)
+#if defined(ENABLE_AVX512)
     if (dim == 0) {
         return;
     }

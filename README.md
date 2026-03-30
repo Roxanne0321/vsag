@@ -17,12 +17,16 @@ For deployment, benchmarking, or large-scale production scenarios, please refer 
 
 ## Parameters
 ### **Index Construction Parameters**
-- **`--window_size` (λ)**：Window size controls how many vector IDs are processed per cache-local segment. Smaller λ ⇒ fewer random accesses but more window switches; larger λ ⇒ better posting list locality but more random writes. λ is tuned to the target hardware’s cache capacity and latency characteristics.
-- **`--doc_prune_ratio` (α)**：Document pruning ratio. Retains the minimal set of high-value non-zero entries whose cumulative mass ≥ α × (total vector mass). Higher α preserves more entries (↑ recall, ↓ QPS); lower α prunes more aggressively (↑ QPS, slight recall drop). Typical: `0.1-1`.
+- **`lambda` (λ)**：Window size used for segmented accumulation. **Valid range: `[10000, 100000]`**.
+- **`alpha` (α)**：Document pruning ratio for base vectors. For each base vector, keep the minimal prefix (after sorting by value descending) whose cumulative mass reaches `alpha * total_mass`. **Valid range: `[0, 1]`**.
+- **`use_reorder`**：Whether to perform exact reranking on coarse candidates. Default is `true`.
 
 ### **Query/Search Parameters**
-- **`--query_prune_ratio` (β)**：Query pruning ratio keeps the minimal set of high-value query entries covering β × (total query mass) during coarse retrieval. Lower β yields faster coarse search but may reduce recall before reranking. Typical: `0.1-1`.
-- **`--reorder_size` (γ)**：Reordering candidate pool size. Number of coarse-stage candidates reranked with exact inner product to produce final top-k results. Larger γ increases recall but adds refinement cost. Common: k × 5 to k × 50. Typical: `50-2000`.
+- **`beta` (β)**：Query term retain ratio in coarse retrieval. Keep top `int(query_dim * beta)` terms by value in each query. **Valid range: `[0, 1]`**.
+- **`gamma` (γ)**：Candidate pool size kept after coarse stage. If `gamma < topk`, internal behavior is `gamma = topk`.
+- **`num_threads`**：Thread count used in search (`omp_set_num_threads`).
+
+> Note: `prune_stragy` is **not** used by current SINDI parameter parser.
 
 ## Installation
 
@@ -56,7 +60,7 @@ which in turn is based on the **MSMARCO Passage Ranking** corpus encoded with th
 ## Usage
 ### Build Index
 ```bash
-./build-release/sparse/scripts/sindi_index_build <basefile> <lambda> <alpha> <index_path>
+./build-release/sparse/scripts/sindi_index_build <basefile> <lambda> <alpha> <use_reorder> <index_path>
 ```
 
 ### Generate Groung Truth

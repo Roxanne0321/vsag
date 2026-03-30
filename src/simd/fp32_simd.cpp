@@ -64,14 +64,27 @@ GetFP32ComputeL2Sqr() {
 }
 FP32ComputeType FP32ComputeL2Sqr = GetFP32ComputeL2Sqr();
 
-static FP32SparseComputeType
-GetFP32ComputeSIP() {
+static FP32SparseAccumulateType
+GetFP32SparseAccumulate() {
     if (SimdStatus::SupportAVX512()) {
 #if defined(ENABLE_AVX512)
-    return avx512::FP32ComputeSIP;
+        return avx512::FP32SparseAccumulate;
+#endif
+    } else if (SimdStatus::SupportAVX2()) {
+#if defined(ENABLE_AVX2)
+        return avx2::FP32SparseAccumulate;
+#endif
+    } else if (SimdStatus::SupportAVX()) {
+#if defined(ENABLE_AVX)
+        return avx::FP32SparseAccumulate;
+#endif
+    } else if (SimdStatus::SupportSSE()) {
+#if defined(ENABLE_SSE)
+        return sse::FP32SparseAccumulate;
 #endif
     }
-    return generic::FP32ComputeSIP;
+    return generic::FP32SparseAccumulate;
 }
-FP32SparseComputeType FP32ComputeSIP = GetFP32ComputeSIP();
+FP32SparseAccumulateType FP32SparseAccumulate = GetFP32SparseAccumulate();
+
 }  // namespace vsag

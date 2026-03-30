@@ -149,6 +149,42 @@ FP32ComputeL2Sqr(const float* query, const float* codes, uint64_t dim) {
 #endif
 }
 
+void
+FP32SparseAccumulate(float* dists,
+                     const uint32_t* ids,
+                     const float* vals,
+                     float query_val,
+                     uint32_t num,
+                     uint32_t start_id) {
+#if defined(ENABLE_AVX2)
+    __m256 q_vec = _mm256_set1_ps(query_val);
+    __m256i start_vec = _mm256_set1_epi32(start_id);
+    uint32_t i = 0;
+    for (; i + 8 <= num; i += 8) {
+        __m256i id_vec = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ids + i));
+        __m256i idx_vec = _mm256_sub_epi32(id_vec, start_vec);
+        __m256 val_vec = _mm256_loadu_ps(vals + i);
+
+        __m256 dist_vec = _mm256_i32gather_ps(dists, idx_vec, 4);
+        dist_vec = _mm256_fmadd_ps(val_vec, q_vec, dist_vec);
+
+        alignas(32) float res[8];
+        alignas(32) int32_t indices[8];
+        _mm256_store_ps(res, dist_vec);
+        _mm256_store_si256(reinterpret_cast<__m256i*>(indices), idx_vec);
+
+        for (int k = 0; k < 8; ++k) {
+            dists[indices[k]] = res[k];
+        }
+    }
+    for (; i < num; ++i) {
+        dists[ids[i] - start_id] += vals[i] * query_val;
+    }
+#else
+    avx::FP32SparseAccumulate(dists, ids, vals, query_val, num, start_id);
+#endif
+}
+
 float
 SQ8ComputeIP(const float* query,
              const uint8_t* codes,
