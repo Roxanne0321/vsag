@@ -15,19 +15,23 @@
 
 #pragma once
 
+#include <algorithm>
+#include <limits>
 #include <shared_mutex>
 #include <string>
 
+#include "basic_types.h"
 #include "flatten_datacell_parameter.h"
 #include "flatten_interface_parameter.h"
+#include "hash_types.h"
 #include "impl/runtime_parameter.h"
-#include "index_common_param.h"
+#include "index_common_param_fwd.h"
 #include "io/reader_io.h"
 #include "quantization/computer.h"
 #include "query_context.h"
 #include "storage/stream_reader.h"
 #include "storage/stream_writer.h"
-#include "typing.h"
+#include "type_helpers.h"
 #include "utils/pointer_define.h"
 #include "vsag/constants.h"
 
@@ -49,6 +53,29 @@ public:
           const InnerIdType* idx,
           InnerIdType id_count,
           QueryContext* ctx = nullptr) = 0;
+
+    virtual void
+    QueryWithDistanceFilter(float* result_dists,
+                            const ComputerInterfacePtr& computer,
+                            const InnerIdType* idx,
+                            InnerIdType id_count,
+                            float threshold,
+                            QueryContext* ctx = nullptr) {
+        this->Query(result_dists, computer, idx, id_count, ctx);
+    }
+
+    virtual void
+    QueryWithDistanceLowerBound(float* result_dists,
+                                float* lower_bounds,
+                                const ComputerInterfacePtr& computer,
+                                const InnerIdType* idx,
+                                InnerIdType id_count,
+                                QueryContext* ctx = nullptr) {
+        this->Query(result_dists, computer, idx, id_count, ctx);
+        if (lower_bounds != nullptr) {
+            std::fill(lower_bounds, lower_bounds + id_count, std::numeric_limits<float>::max());
+        }
+    }
 
     virtual ComputerInterfacePtr
     FactoryComputer(const void* query) = 0;
@@ -112,9 +139,7 @@ public:
     }
 
     virtual IndexCommonParam
-    ExportCommonParam() {
-        throw VsagException(ErrorType::INTERNAL_ERROR, "ExportCommonParam is not implemented");
-    }
+    ExportCommonParam();
 
 public:
     virtual bool

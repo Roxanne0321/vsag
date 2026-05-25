@@ -28,10 +28,11 @@ class ReorderInterface {
 public:
     virtual DistHeapPtr
     Reorder(const DistHeapPtr& input,
-            const float* query,
+            const void* query,
             int64_t topk,
             QueryContext& ctx,
-            IteratorFilterContext* iter_ctx = nullptr) = 0;
+            IteratorFilterContext* iter_ctx = nullptr,
+            const DistanceRecordVector* rabitq_lower_bound_candidates = nullptr) = 0;
 };
 
 }  // namespace vsag

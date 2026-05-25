@@ -15,16 +15,24 @@
 #include "flatten_interface.h"
 
 #include "flatten_datacell.h"
+#include "index_common_param.h"
 #include "inner_string_params.h"
 #include "io/io_headers.h"
+#include "multi_vector_datacell.h"
 #include "quantization/int8_quantizer.h"
 #include "quantization/quantizer_adapter.h"
 #include "quantization/quantizer_headers.h"
 #include "quantization/sparse_quantization/sparse_quantizer.h"
 #include "quantization/transform_quantization/transform_quantizer_parameter.h"
+#include "rabitq_split_datacell.h"
 #include "sparse_vector_datacell.h"
 
 namespace vsag {
+
+IndexCommonParam
+FlattenInterface::ExportCommonParam() {
+    throw VsagException(ErrorType::INTERNAL_ERROR, "ExportCommonParam is not implemented");
+}
 template <typename QuantTemp, typename IOTemp>
 static FlattenInterfacePtr
 make_instance_flatten(const FlattenInterfaceParamPtr& param, const IndexCommonParam& common_param) {
@@ -37,6 +45,21 @@ make_instance_flatten(const FlattenInterfaceParamPtr& param, const IndexCommonPa
     throw VsagException(ErrorType::INVALID_ARGUMENT,
                         fmt::format("Unknown flatten interface name: {}", param->name));
 }
+template <typename QuantTemp, typename IOTemp>
+static FlattenInterfacePtr
+make_instance_multi_vector(const FlattenInterfaceParamPtr& param,
+                           const IndexCommonParam& common_param) {
+    auto& io_param = param->io_parameter;
+    auto& quantizer_param = param->quantizer_parameter;
+
+    if (param->name == MULTI_VECTOR_DATA_CELL) {
+        return std::make_shared<MultiVectorDataCell<QuantTemp, IOTemp>>(
+            quantizer_param, io_param, common_param);
+    }
+    throw VsagException(ErrorType::INVALID_ARGUMENT,
+                        fmt::format("Unknown flatten interface name: {}", param->name));
+}
+
 template <typename QuantTemp, typename IOTemp>
 static FlattenInterfacePtr
 make_instance_sparse(const FlattenInterfaceParamPtr& param, const IndexCommonParam& common_param) {
@@ -66,6 +89,10 @@ make_instance_with_tq(const FlattenInterfaceParamPtr& param,
 template <MetricType metric, typename IOTemp>
 static FlattenInterfacePtr
 make_instance(const FlattenInterfaceParamPtr& param, const IndexCommonParam& common_param) {
+    if (param->name == MULTI_VECTOR_DATA_CELL) {
+        return make_instance_multi_vector<FP32Quantizer<metric>, IOTemp>(param, common_param);
+    }
+
     std::string quantization_string = param->quantizer_parameter->GetTypeName();
 
     // Handle INT8 data type specially
@@ -154,6 +181,14 @@ make_instance(const FlattenInterfaceParamPtr& param, const IndexCommonParam& com
             param, common_param, is_transform_quantizer);
     }
     if (actual_quant_type == QUANTIZATION_TYPE_VALUE_RABITQ) {
+        if (param->name == RABITQ_SPLIT_DATA_CELL) {
+            if (is_transform_quantizer) {
+                throw VsagException(ErrorType::INVALID_ARGUMENT,
+                                    "rabitq split data cell does not support transform quantizer");
+            }
+            return std::make_shared<RaBitQSplitDataCell<metric, IOTemp>>(
+                param->quantizer_parameter, param->io_parameter, common_param);
+        }
         return make_instance_with_tq<RaBitQuantizer<metric>, IOTemp, metric>(
             param, common_param, is_transform_quantizer);
     }

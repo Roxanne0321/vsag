@@ -1842,6 +1842,18 @@ SQ8UniformComputeCodesIP(const uint8_t* codes1, const uint8_t* codes2, uint64_t 
 #endif
 }
 
+void
+SQ8UniformComputeCodesIPBatch(const uint8_t* RESTRICT query,
+                              const uint8_t* RESTRICT codes,
+                              uint64_t dim,
+                              uint64_t n_codes,
+                              uint64_t code_stride,
+                              float* RESTRICT out) {
+    for (uint64_t i = 0; i < n_codes; ++i) {
+        out[i] = neon::SQ8UniformComputeCodesIP(query, codes + i * code_stride, dim);
+    }
+}
+
 #if defined(ENABLE_NEON)
 __inline void __attribute__((__always_inline__)) extract_12_bits_to_mask(const uint8_t* bits,
                                                                          uint64_t bit_offset,
@@ -2068,6 +2080,29 @@ RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, floa
 #else
     return generic::RaBitQFloatBinaryIP(vector, bits, dim, inv_sqrt_d);
 #endif
+}
+
+void
+RaBitQFloatBinaryIPBatch4(const float* vector,
+                          const uint8_t* bits1,
+                          const uint8_t* bits2,
+                          const uint8_t* bits3,
+                          const uint8_t* bits4,
+                          uint64_t dim,
+                          float inv_sqrt_d,
+                          float* results) {
+    generic::RaBitQFloatBinaryIPBatch4(
+        vector, bits1, bits2, bits3, bits4, dim, inv_sqrt_d, results);
+}
+
+float
+RaBitQFloatSplitCodeIP(const float* vector,
+                       const uint8_t* one_bit_code,
+                       const uint8_t* supplement_code,
+                       uint64_t dim,
+                       uint32_t supplement_bits) {
+    return generic::RaBitQFloatSplitCodeIP(
+        vector, one_bit_code, supplement_code, dim, supplement_bits);
 }
 
 void
@@ -2380,4 +2415,72 @@ FHTRotate(float* data, uint64_t dim_) {
     generic::FHTRotate(data, dim_);
 #endif
 }
+
+float
+NormalizeWithCentroid(const float* from, const float* centroid, float* to, uint64_t dim) {
+#if defined(ENABLE_NEON)
+    float norm_sq = 0;
+    uint64_t d = dim;
+    if (d >= 4) {
+        float32x4_t sum = vdupq_n_f32(0.0f);
+        while (d >= 4) {
+            float32x4_t f = vld1q_f32(from + dim - d);
+            float32x4_t c = vld1q_f32(centroid + dim - d);
+            float32x4_t diff = vsubq_f32(f, c);
+            sum = vmlaq_f32(sum, diff, diff);
+            d -= 4;
+        }
+        norm_sq = vaddvq_f32(sum);
+    }
+    if (d > 0) {
+        norm_sq += generic::FP32ComputeL2Sqr(from + dim - d, centroid + dim - d, d);
+    }
+
+    float norm = 0;
+    if (norm_sq < 1e-5f) {
+        norm = 1.0f;
+    } else {
+        norm = std::sqrt(norm_sq);
+    }
+
+    float32x4_t normVec = vdupq_n_f32(norm);
+    uint64_t i = 0;
+    for (; i + 3 < dim; i += 4) {
+        float32x4_t f = vld1q_f32(from + i);
+        float32x4_t c = vld1q_f32(centroid + i);
+        float32x4_t diff = vsubq_f32(f, c);
+        float32x4_t result = vdivq_f32(diff, normVec);
+        vst1q_f32(to + i, result);
+    }
+    if (i < dim) {
+        for (; i < dim; ++i) {
+            to[i] = (from[i] - centroid[i]) / norm;
+        }
+    }
+    return norm;
+#else
+    return generic::NormalizeWithCentroid(from, centroid, to, dim);
+#endif
+}
+
+void
+InverseNormalizeWithCentroid(
+    const float* from, const float* centroid, float* to, uint64_t dim, float norm) {
+#if defined(ENABLE_NEON)
+    float32x4_t normVec = vdupq_n_f32(norm);
+    uint64_t i = 0;
+    for (; i + 3 < dim; i += 4) {
+        float32x4_t f = vld1q_f32(from + i);
+        float32x4_t c = vld1q_f32(centroid + i);
+        float32x4_t result = vfmaq_f32(c, f, normVec);
+        vst1q_f32(to + i, result);
+    }
+    for (; i < dim; i++) {
+        to[i] = from[i] * norm + centroid[i];
+    }
+#else
+    generic::InverseNormalizeWithCentroid(from, centroid, to, dim, norm);
+#endif
+}
+
 }  // namespace vsag::neon

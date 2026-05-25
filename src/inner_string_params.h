@@ -30,10 +30,12 @@ const char* const INDEX_TYPE_PYRAMID = "pyramid";
 
 const char* const TYPE_KEY = "type";
 const char* const USE_REORDER_KEY = "use_reorder";
+const char* const REORDER_SOURCE_KEY = "reorder_source";
 const char* const USE_QUANTIZATION = "use_quantization";
 const char* const EXTRA_INFO_KEY = "extra_info";
 const char* const USE_ATTRIBUTE_FILTER_KEY = "use_attribute_filter";
 const char* const BUILD_THREAD_COUNT_KEY = "build_thread_count";
+const char* const LABEL_REMAP_TYPE_KEY = "label_remap_type";
 const char* const BASE_CODES_KEY = "base_codes";
 const char* const PRECISE_CODES_KEY = "precise_codes";
 const char* const STORE_RAW_VECTOR_KEY = "store_raw_vector";
@@ -46,6 +48,8 @@ const char* const HGRAPH_USE_ELP_OPTIMIZER_KEY = "use_elp_optimizer";
 const char* const HGRAPH_IGNORE_REORDER_KEY = "ignore_reorder";
 const char* const HGRAPH_BUILD_BY_BASE_QUANTIZATION_KEY = "build_by_base";
 const char* const HGRAPH_USE_REVERSE_EDGES_KEY = "use_reverse_edges";
+const char* const LABEL_REMAP_TYPE_VALUE_ROBIN = "robin";
+const char* const LABEL_REMAP_TYPE_VALUE_PG = "pg";
 const char* const GRAPH_KEY = "graph";
 const char* const ALPHA_KEY = "alpha";
 
@@ -96,8 +100,10 @@ const char* const USE_FHT_KEY = "use_fht";
 
 // quantization param
 const char* const TQ_CHAIN_KEY = "tq_chain";
+const char* const RABITQ_QUANTIZATION_VERSION_KEY = "rabitq_version";
 const char* const RABITQ_QUANTIZATION_BITS_PER_DIM_QUERY_KEY = "rabitq_bits_per_dim_query";
 const char* const RABITQ_QUANTIZATION_BITS_PER_DIM_BASE_KEY = "rabitq_bits_per_dim_base";
+const char* const RABITQ_QUANTIZATION_ERROR_RATE_KEY = "rabitq_error_rate";
 const char* const SQ4_UNIFORM_QUANTIZATION_TRUNC_RATE_KEY = "sq4_uniform_trunc_rate";
 const char* const PRODUCT_QUANTIZATION_DIM_KEY = "pq_dim";
 const char* const PRODUCT_QUANTIZATION_BITS_KEY = "pq_bits";
@@ -150,7 +156,11 @@ const char* const GNO_IMI_SECOND_ORDER_BUCKETS_COUNT_KEY = "second_order_buckets
 
 const char* const GNO_IMI_SEARCH_PARAM_FIRST_ORDER_SCAN_RATIO = "first_order_scan_ratio";
 const char* const FLATTEN_DATA_CELL = "flatten_data_cell";
+const char* const RABITQ_SPLIT_DATA_CELL = "rabitq_split_data_cell";
 const char* const SPARSE_VECTOR_DATA_CELL = "sparse_vector_data_cell";
+const char* const MULTI_VECTOR_DATA_CELL = "multi_vector_data_cell";
+
+const char* const MULTI_VECTOR_CODES = "multi_vector";
 
 // for pyramid index
 const char* const NO_BUILD_LEVELS = "no_build_levels";
@@ -160,6 +170,7 @@ const char* const GRAPH_SUPPORT_REMOVE = "support_remove";
 const char* const REMOVE_FLAG_BIT = "remove_flag_bit";
 const char* const HOLD_MOLDS = "hold_molds";
 const char* const SUPPORT_DUPLICATE = "support_duplicate";
+const char* const DUPLICATE_DISTANCE_THRESHOLD = "duplicate_distance_threshold";
 const char* const SUPPORT_TOMBSTONE = "support_tombstone";
 const char* const SUPPORT_AUTOTUNE = "support_autotune";
 
@@ -169,6 +180,7 @@ const char* const BASIC_INFO = "basic_info";
 
 const char* const CODES_TYPE_KEY = "codes_type";
 const char* const FLATTEN_CODES = "flatten";
+const char* const RABITQ_SPLIT_CODES = "rabitq_split";
 const char* const SPARSE_CODES = "sparse";
 
 const char* const IVF_SEARCH_PARAM_SCAN_BUCKETS_COUNT = "scan_buckets_count";
@@ -192,6 +204,7 @@ const std::unordered_map<std::string, std::string> DEFAULT_MAP = {
     {"BASE_CODES_KEY", BASE_CODES_KEY},
     {"PRECISE_CODES_KEY", PRECISE_CODES_KEY},
     {"HGRAPH_SUPPORT_DUPLICATE", HGRAPH_SUPPORT_DUPLICATE},
+    {"HGRAPH_DUPLICATE_DISTANCE_THRESHOLD", HGRAPH_DUPLICATE_DISTANCE_THRESHOLD},
     {"IO_TYPE_VALUE_MEMORY_IO", IO_TYPE_VALUE_MEMORY_IO},
     {"IO_TYPE_VALUE_BLOCK_MEMORY_IO", IO_TYPE_VALUE_BLOCK_MEMORY_IO},
     {"IO_TYPE_VALUE_BUFFER_IO", IO_TYPE_VALUE_BUFFER_IO},
@@ -247,6 +260,9 @@ const std::unordered_map<std::string, std::string> DEFAULT_MAP = {
     {"IVF_PARTITION_STRATEGY_TYPE_NEAREST", IVF_PARTITION_STRATEGY_TYPE_NEAREST},
     {"IVF_TRAIN_TYPE_KMEANS", IVF_TRAIN_TYPE_KMEANS},
     {"BUILD_THREAD_COUNT_KEY", BUILD_THREAD_COUNT_KEY},
+    {"LABEL_REMAP_TYPE_KEY", LABEL_REMAP_TYPE_KEY},
+    {"LABEL_REMAP_TYPE_VALUE_ROBIN", LABEL_REMAP_TYPE_VALUE_ROBIN},
+    {"LABEL_REMAP_TYPE_VALUE_PG", LABEL_REMAP_TYPE_VALUE_PG},
     {"SEARCH_PARALLELISM", SEARCH_PARALLELISM},
     {"GRAPH_SUPPORT_REMOVE", GRAPH_SUPPORT_REMOVE},
     {"REMOVE_FLAG_BIT", REMOVE_FLAG_BIT},
@@ -257,7 +273,10 @@ const std::unordered_map<std::string, std::string> DEFAULT_MAP = {
     {"RAW_VECTOR_KEY", RAW_VECTOR_KEY},
     {"ATTR_HAS_BUCKETS_KEY", ATTR_HAS_BUCKETS_KEY},
     {"ATTR_PARAMS_KEY", ATTR_PARAMS_KEY},
+    {"RABITQ_QUANTIZATION_VERSION_KEY", RABITQ_QUANTIZATION_VERSION_KEY},
     {"RABITQ_QUANTIZATION_BITS_PER_DIM_QUERY_KEY", RABITQ_QUANTIZATION_BITS_PER_DIM_QUERY_KEY},
+    {"RABITQ_QUANTIZATION_BITS_PER_DIM_BASE_KEY", RABITQ_QUANTIZATION_BITS_PER_DIM_BASE_KEY},
+    {"RABITQ_QUANTIZATION_ERROR_RATE_KEY", RABITQ_QUANTIZATION_ERROR_RATE_KEY},
     {"TQ_CHAIN_KEY", TQ_CHAIN_KEY},
     {"NO_BUILD_LEVELS", NO_BUILD_LEVELS},
     {"GRAPH_TYPE_KEY", GRAPH_TYPE_KEY}};

@@ -18,7 +18,7 @@ Before you make any contributions, make sure you follow this list.
 
 Contributions to vsag fall into the following categories.
 
-1.  To report a bug or a problem with documentation, please file an [issue](https://github.com/antgroup/vsag/issues/new/choose) providing the details of the problem. If you believe the issue needs priority attention, please comment on the issue to notify the team.
+1.  To report a bug or a problem with documentation, please file an [issue](https://github.com/antgroup/vsag/issues/new/choose) providing the details of the problem. If you believe the issue needs priority attention, please comment on the issue to notify the team. You can also let an AI agent draft the issue body for you — see `.github/ISSUE_TEMPLATE/ISSUE_GUIDE.md` and `tools/issue-helper/`.
 2.  To propose a new feature, please file a new feature request [issue](https://github.com/antgroup/vsag/issues/new/choose). Describe the intended feature and discuss the design and implementation with the team and community. Once the team agrees that the plan looks good, go ahead and implement it, following the [Contributing code](CONTRIBUTING.md#contributing-code).
 3.  To implement a feature or bug-fix for an existing outstanding issue, follow the [Contributing code](CONTRIBUTING.md#contributing-code). If you need more context on a particular issue, comment on the issue to let people know.
 
@@ -148,6 +148,33 @@ Every pull request **must** have the following two labels before it can be merge
 -   A **`version/*`** label indicating the target version, e.g. `version/1.0`, `version/0.18`.
 
 Mergify enforces these labels via check runs. The PR merge will be blocked until both labels are present.
+
+## Linking an Issue
+
+PRs labeled **`kind/bug`** or **`kind/feature`** must reference an existing
+issue in the PR description using a GitHub-recognized auto-closing keyword,
+so the issue closes automatically when the PR merges:
+
+```text
+Fixes: #1234
+Closes: #1234
+Resolves: #1234
+```
+
+Cross-repo references (`owner/repo#1234`) and full issue URLs are also
+accepted. PRs labeled `kind/improvement` or `kind/documentation` are
+exempt from this requirement.
+
+This rule is enforced by:
+
+1.  The `PR Issue Link Check` GitHub Action, which runs on every PR
+    targeting `main` or `0.*` branches. Repo administrators are expected
+    to add it to the **required status checks** for those branches so
+    that a failed check actually blocks merge.
+2.  A Mergify `merge_protections` rule as a defense-in-depth fallback.
+
+If the check fails, edit the PR description to add the required keyword
+and the check will re-run automatically.
 
 ## Commit message and skip CI
 

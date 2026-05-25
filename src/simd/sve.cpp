@@ -1019,6 +1019,18 @@ SQ8UniformComputeCodesIP(const uint8_t* RESTRICT codes1,
 #endif
 }
 
+void
+SQ8UniformComputeCodesIPBatch(const uint8_t* RESTRICT query,
+                              const uint8_t* RESTRICT codes,
+                              uint64_t dim,
+                              uint64_t n_codes,
+                              uint64_t code_stride,
+                              float* RESTRICT out) {
+    for (uint64_t i = 0; i < n_codes; ++i) {
+        out[i] = sve::SQ8UniformComputeCodesIP(query, codes + i * code_stride, dim);
+    }
+}
+
 float
 RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, float inv_sqrt_d) {
 #if defined(ENABLE_SVE)
@@ -1064,6 +1076,28 @@ RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, floa
 #else
     return neon::RaBitQFloatBinaryIP(vector, bits, dim, inv_sqrt_d);
 #endif
+}
+
+void
+RaBitQFloatBinaryIPBatch4(const float* vector,
+                          const uint8_t* bits1,
+                          const uint8_t* bits2,
+                          const uint8_t* bits3,
+                          const uint8_t* bits4,
+                          uint64_t dim,
+                          float inv_sqrt_d,
+                          float* results) {
+    neon::RaBitQFloatBinaryIPBatch4(vector, bits1, bits2, bits3, bits4, dim, inv_sqrt_d, results);
+}
+
+float
+RaBitQFloatSplitCodeIP(const float* vector,
+                       const uint8_t* one_bit_code,
+                       const uint8_t* supplement_code,
+                       uint64_t dim,
+                       uint32_t supplement_bits) {
+    return neon::RaBitQFloatSplitCodeIP(
+        vector, one_bit_code, supplement_code, dim, supplement_bits);
 }
 
 uint32_t
@@ -1425,6 +1459,80 @@ FHTRotate(float* data, uint64_t dim_) {
     }
 #else
     neon::FHTRotate(data, dim_);
+#endif
+}
+
+float
+NormalizeWithCentroid(const float* from, const float* centroid, float* to, uint64_t dim) {
+#if defined(ENABLE_SVE)
+    if (dim == 0) {
+        return 1.0f;
+    }
+
+    svfloat32_t sum = svdup_f32(0.0f);
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+
+    svbool_t predicate = svwhilelt_b32(i, dim);
+    do {
+        svfloat32_t f_vec = svld1_f32(predicate, from + i);
+        svfloat32_t c_vec = svld1_f32(predicate, centroid + i);
+        svfloat32_t diff = svsub_f32_z(predicate, f_vec, c_vec);
+        sum = svmla_f32_m(predicate, sum, diff, diff);
+        i += step;
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
+
+    float norm_sq = svaddv_f32(svptrue_b32(), sum);
+    float norm = 0;
+    if (norm_sq < 1e-5f) {
+        norm = 1.0f;
+    } else {
+        norm = std::sqrt(norm_sq);
+    }
+
+    svfloat32_t normVec = svdup_f32(norm);
+    i = 0;
+    predicate = svwhilelt_b32(i, dim);
+    do {
+        svfloat32_t f_vec = svld1_f32(predicate, from + i);
+        svfloat32_t c_vec = svld1_f32(predicate, centroid + i);
+        svfloat32_t diff = svsub_f32_z(predicate, f_vec, c_vec);
+        svfloat32_t result = svdiv_f32_z(predicate, diff, normVec);
+        svst1_f32(predicate, to + i, result);
+        i += step;
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
+
+    return norm;
+#else
+    return neon::NormalizeWithCentroid(from, centroid, to, dim);
+#endif
+}
+
+void
+InverseNormalizeWithCentroid(
+    const float* from, const float* centroid, float* to, uint64_t dim, float norm) {
+#if defined(ENABLE_SVE)
+    if (dim == 0) {
+        return;
+    }
+
+    svfloat32_t normVec = svdup_f32(norm);
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+
+    svbool_t predicate = svwhilelt_b32(i, dim);
+    do {
+        svfloat32_t f_vec = svld1_f32(predicate, from + i);
+        svfloat32_t c_vec = svld1_f32(predicate, centroid + i);
+        svfloat32_t result = svmad_f32_z(predicate, f_vec, normVec, c_vec);
+        svst1_f32(predicate, to + i, result);
+        i += step;
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
+#else
+    neon::InverseNormalizeWithCentroid(from, centroid, to, dim, norm);
 #endif
 }
 

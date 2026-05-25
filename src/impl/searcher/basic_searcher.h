@@ -19,10 +19,11 @@
 #include "attr/executor/executor.h"
 #include "datacell/flatten_interface.h"
 #include "datacell/graph_interface.h"
+#include "hash_types.h"
 #include "impl/heap/distance_heap.h"
 #include "impl/inner_search_param.h"
 #include "index/iterator_filter.h"
-#include "index_common_param.h"
+#include "index_common_param_fwd.h"
 #include "utils/lock_strategy.h"
 #include "utils/pointer_define.h"
 #include "utils/timer.h"
@@ -47,7 +48,8 @@ public:
            const void* query,
            const InnerSearchParam& inner_search_param,
            const LabelTablePtr& label_table,
-           QueryContext* ctx) const;
+           QueryContext* ctx,
+           DistanceRecordVector* rabitq_lower_bound_candidates = nullptr) const;
 
     virtual DistHeapPtr
     Search(const GraphInterfacePtr& graph,
@@ -56,7 +58,8 @@ public:
            const void* query,
            const InnerSearchParam& inner_search_param,
            IteratorFilterContext* iter_ctx,
-           QueryContext* ctx) const;
+           QueryContext* ctx,
+           DistanceRecordVector* rabitq_lower_bound_candidates = nullptr) const;
 
     virtual bool
     SetRuntimeParameters(const UnorderedMap<std::string, float>& new_params);
@@ -96,7 +99,8 @@ private:
                 const void* query,
                 const InnerSearchParam& inner_search_param,
                 const LabelTablePtr& label_table,
-                QueryContext* ctx) const;
+                QueryContext* ctx,
+                DistanceRecordVector* rabitq_lower_bound_candidates = nullptr) const;
 
     template <InnerSearchMode mode = KNN_SEARCH>
     DistHeapPtr
@@ -106,7 +110,8 @@ private:
                 const void* query,
                 const InnerSearchParam& inner_search_param,
                 IteratorFilterContext* iter_ctx,
-                QueryContext* ctx) const;
+                QueryContext* ctx,
+                DistanceRecordVector* rabitq_lower_bound_candidates = nullptr) const;
 
 private:
     Allocator* allocator_{nullptr};

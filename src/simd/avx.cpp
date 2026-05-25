@@ -1006,6 +1006,18 @@ SQ8UniformComputeCodesIP(const uint8_t* RESTRICT codes1,
 #endif
 }
 
+void
+SQ8UniformComputeCodesIPBatch(const uint8_t* RESTRICT query,
+                              const uint8_t* RESTRICT codes,
+                              uint64_t dim,
+                              uint64_t n_codes,
+                              uint64_t code_stride,
+                              float* RESTRICT out) {
+    for (uint64_t i = 0; i < n_codes; ++i) {
+        out[i] = avx::SQ8UniformComputeCodesIP(query, codes + i * code_stride, dim);
+    }
+}
+
 float
 RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, float inv_sqrt_d) {
 #if defined(ENABLE_AVX)
@@ -1051,6 +1063,93 @@ RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, floa
     return result;
 #else
     return sse::RaBitQFloatBinaryIP(vector, bits, dim, inv_sqrt_d);
+#endif
+}
+
+void
+RaBitQFloatBinaryIPBatch4(const float* vector,
+                          const uint8_t* bits1,
+                          const uint8_t* bits2,
+                          const uint8_t* bits3,
+                          const uint8_t* bits4,
+                          uint64_t dim,
+                          float inv_sqrt_d,
+                          float* results) {
+#if defined(ENABLE_AVX)
+    generic::RaBitQFloatBinaryIPBatch4(
+        vector, bits1, bits2, bits3, bits4, dim, inv_sqrt_d, results);
+#else
+    sse::RaBitQFloatBinaryIPBatch4(vector, bits1, bits2, bits3, bits4, dim, inv_sqrt_d, results);
+#endif
+}
+
+float
+RaBitQFloatSplitCodeIP(const float* vector,
+                       const uint8_t* one_bit_code,
+                       const uint8_t* supplement_code,
+                       uint64_t dim,
+                       uint32_t supplement_bits) {
+#if defined(ENABLE_AVX)
+    if (dim == 0) {
+        return 0.0F;
+    }
+
+    const uint64_t plane_bytes = (dim + 7) / 8;
+    const uint32_t one_bit_weight = 1U << supplement_bits;
+    __m256 sum = _mm256_setzero_ps();
+
+    uint64_t d = 0;
+    for (; d + 8 <= dim; d += 8) {
+        float code_values[8];
+        const uint64_t byte_idx = d >> 3;
+        const uint8_t one_bit_byte = one_bit_code[byte_idx];
+        for (uint32_t lane = 0; lane < 8; ++lane) {
+            const uint8_t bit_mask = static_cast<uint8_t>(1U << lane);
+            uint32_t code = (one_bit_byte & bit_mask) != 0 ? one_bit_weight : 0U;
+            for (uint32_t bit = 0; bit < supplement_bits; ++bit) {
+                const auto* plane = supplement_code + static_cast<uint64_t>(bit) * plane_bytes;
+                if ((plane[byte_idx] & bit_mask) != 0) {
+                    code += 1U << bit;
+                }
+            }
+            code_values[lane] = static_cast<float>(code);
+        }
+
+        const __m256 code = _mm256_set_ps(code_values[7],
+                                          code_values[6],
+                                          code_values[5],
+                                          code_values[4],
+                                          code_values[3],
+                                          code_values[2],
+                                          code_values[1],
+                                          code_values[0]);
+        const __m256 vec = _mm256_loadu_ps(vector + d);
+        sum = _mm256_add_ps(_mm256_mul_ps(code, vec), sum);
+    }
+
+    alignas(32) float temp[8];
+    _mm256_store_ps(temp, sum);
+    float result = 0.0F;
+    for (float value : temp) {
+        result += value;
+    }
+
+    for (; d < dim; ++d) {
+        const uint64_t byte_idx = d >> 3;
+        const uint8_t bit_mask = static_cast<uint8_t>(1U << (d & 7));
+        uint32_t code = (one_bit_code[byte_idx] & bit_mask) != 0 ? one_bit_weight : 0U;
+        for (uint32_t bit = 0; bit < supplement_bits; ++bit) {
+            const auto* plane = supplement_code + static_cast<uint64_t>(bit) * plane_bytes;
+            if ((plane[byte_idx] & bit_mask) != 0) {
+                code += 1U << bit;
+            }
+        }
+        result += vector[d] * static_cast<float>(code);
+    }
+
+    return result;
+#else
+    return sse::RaBitQFloatSplitCodeIP(vector, one_bit_code, supplement_code, dim, supplement_bits);
 #endif
 }
 
@@ -1276,4 +1375,70 @@ KacsWalk(float* data, uint64_t len) {
     return sse::FHTRotate(data, len);
 #endif
 }
+
+float
+NormalizeWithCentroid(const float* from, const float* centroid, float* to, uint64_t dim) {
+#if defined(ENABLE_AVX)
+    float norm_sq = 0;
+    uint64_t i = 0;
+    if (dim >= 8) {
+        __m256 sum = _mm256_setzero_ps();
+        for (; i + 7 < dim; i += 8) {
+            __m256 f = _mm256_loadu_ps(from + i);
+            __m256 c = _mm256_loadu_ps(centroid + i);
+            __m256 diff = _mm256_sub_ps(f, c);
+            sum = _mm256_add_ps(sum, _mm256_mul_ps(diff, diff));
+        }
+        norm_sq = avx_reduce_add_ps(sum);
+        norm_sq += sse::FP32ComputeL2Sqr(from + i, centroid + i, dim - i);
+    } else {
+        norm_sq = sse::FP32ComputeL2Sqr(from, centroid, dim);
+    }
+
+    float norm = 0;
+    if (norm_sq < 1e-5f) {
+        norm = 1.0f;
+    } else {
+        norm = std::sqrt(norm_sq);
+    }
+
+    __m256 normVec = _mm256_set1_ps(norm);
+    for (i = 0; i + 7 < dim; i += 8) {
+        __m256 f = _mm256_loadu_ps(from + i);
+        __m256 c = _mm256_loadu_ps(centroid + i);
+        __m256 diff = _mm256_sub_ps(f, c);
+        __m256 result = _mm256_div_ps(diff, normVec);
+        _mm256_storeu_ps(to + i, result);
+    }
+    if (i < dim) {
+        for (; i < dim; ++i) {
+            to[i] = (from[i] - centroid[i]) / norm;
+        }
+    }
+    return norm;
+#else
+    return sse::NormalizeWithCentroid(from, centroid, to, dim);
+#endif
+}
+
+void
+InverseNormalizeWithCentroid(
+    const float* from, const float* centroid, float* to, uint64_t dim, float norm) {
+#if defined(ENABLE_AVX)
+    uint64_t i = 0;
+    __m256 normVec = _mm256_set1_ps(norm);
+    for (; i + 7 < dim; i += 8) {
+        __m256 f = _mm256_loadu_ps(from + i);
+        __m256 c = _mm256_loadu_ps(centroid + i);
+        __m256 result = _mm256_add_ps(_mm256_mul_ps(f, normVec), c);
+        _mm256_storeu_ps(to + i, result);
+    }
+    if (i < dim) {
+        sse::InverseNormalizeWithCentroid(from + i, centroid + i, to + i, dim - i, norm);
+    }
+#else
+    sse::InverseNormalizeWithCentroid(from, centroid, to, dim, norm);
+#endif
+}
+
 }  // namespace vsag::avx

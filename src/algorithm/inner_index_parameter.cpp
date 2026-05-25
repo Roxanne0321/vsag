@@ -25,11 +25,43 @@
 
 namespace vsag {
 
+namespace {
+
+auto
+parse_label_remap_type(const std::string& remap_type) -> LabelRemapType {
+    if (remap_type == LABEL_REMAP_TYPE_VALUE_PG) {
+        return LabelRemapType::PG;
+    }
+    if (remap_type == LABEL_REMAP_TYPE_VALUE_ROBIN) {
+        return LabelRemapType::ROBIN;
+    }
+    throw VsagException(ErrorType::INVALID_ARGUMENT,
+                        fmt::format("invalid label_remap_type: {}", remap_type));
+}
+
+auto
+dump_label_remap_type(LabelRemapType remap_type) -> const char* {
+    return remap_type == LabelRemapType::ROBIN ? LABEL_REMAP_TYPE_VALUE_ROBIN
+                                               : LABEL_REMAP_TYPE_VALUE_PG;
+}
+
+}  // namespace
+
 void
 InnerIndexParameter::FromJson(const JsonType& json) {
     if (json.Contains(USE_REORDER_KEY)) {
         this->use_reorder = json[USE_REORDER_KEY].GetBool();
     }
+
+    if (json.Contains(REORDER_SOURCE_KEY)) {
+        this->reorder_source = json[REORDER_SOURCE_KEY].GetString();
+    }
+    CHECK_ARGUMENT(this->reorder_source == HGRAPH_REORDER_SOURCE_PRECISE ||
+                       this->reorder_source == HGRAPH_REORDER_SOURCE_BASE,
+                   fmt::format("invalid reorder_source: {}, supported values are \"{}\" and \"{}\"",
+                               this->reorder_source,
+                               HGRAPH_REORDER_SOURCE_PRECISE,
+                               HGRAPH_REORDER_SOURCE_BASE));
 
     if (json.Contains(USE_ATTRIBUTE_FILTER_KEY)) {
         this->use_attribute_filter = json[USE_ATTRIBUTE_FILTER_KEY].GetBool();
@@ -47,7 +79,11 @@ InnerIndexParameter::FromJson(const JsonType& json) {
         this->build_thread_count = json[BUILD_THREAD_COUNT_KEY].GetInt();
     }
 
-    if (this->use_reorder) {
+    if (json.Contains(LABEL_REMAP_TYPE_KEY)) {
+        this->label_remap_type = parse_label_remap_type(json[LABEL_REMAP_TYPE_KEY].GetString());
+    }
+
+    if (this->use_reorder && this->reorder_source != HGRAPH_REORDER_SOURCE_BASE) {
         CHECK_ARGUMENT(
             json.Contains(PRECISE_CODES_KEY),
             fmt::format("ivf parameters must contains {} when enable reorder", PRECISE_CODES_KEY));
@@ -84,9 +120,11 @@ JsonType
 InnerIndexParameter::ToJson() const {
     JsonType json;
     json[USE_REORDER_KEY].SetBool(this->use_reorder);
+    json[REORDER_SOURCE_KEY].SetString(this->reorder_source);
     json[BUILD_THREAD_COUNT_KEY].SetInt(this->build_thread_count);
+    json[LABEL_REMAP_TYPE_KEY].SetString(dump_label_remap_type(this->label_remap_type));
     json[USE_ATTRIBUTE_FILTER_KEY].SetBool(this->use_attribute_filter);
-    if (use_reorder) {
+    if (use_reorder && this->reorder_source != HGRAPH_REORDER_SOURCE_BASE) {
         json[PRECISE_CODES_KEY].SetJson(this->precise_codes_param->ToJson());
     }
     json[STORE_RAW_VECTOR_KEY].SetBool(this->store_raw_vector);
@@ -117,7 +155,11 @@ InnerIndexParameter::CheckCompatibility(const ParamPtr& other) const {
         logger::error("InnerIndexParameter::CheckCompatibility: use_reorder mismatch");
         return false;
     }
-    if (this->use_reorder) {
+    if (this->reorder_source != inner_index_param->reorder_source) {
+        logger::error("InnerIndexParameter::CheckCompatibility: reorder_source mismatch");
+        return false;
+    }
+    if (this->use_reorder && this->reorder_source != HGRAPH_REORDER_SOURCE_BASE) {
         if (not this->precise_codes_param->CheckCompatibility(
                 inner_index_param->precise_codes_param)) {
             logger::error("InnerIndexParameter::CheckCompatibility: precise_codes_param mismatch");
@@ -127,6 +169,11 @@ InnerIndexParameter::CheckCompatibility(const ParamPtr& other) const {
 
     if (this->use_attribute_filter != inner_index_param->use_attribute_filter) {
         logger::error("InnerIndexParameter::CheckCompatibility: use_attribute_filter mismatch");
+        return false;
+    }
+
+    if (this->label_remap_type != inner_index_param->label_remap_type) {
+        logger::error("InnerIndexParameter::CheckCompatibility: label_remap_type mismatch");
         return false;
     }
 

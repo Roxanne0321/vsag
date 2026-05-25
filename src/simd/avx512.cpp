@@ -1034,6 +1034,18 @@ SQ8UniformComputeCodesIP(const uint8_t* RESTRICT codes1,
 #endif
 }
 
+void
+SQ8UniformComputeCodesIPBatch(const uint8_t* RESTRICT query,
+                              const uint8_t* RESTRICT codes,
+                              uint64_t dim,
+                              uint64_t n_codes,
+                              uint64_t code_stride,
+                              float* RESTRICT out) {
+    for (uint64_t i = 0; i < n_codes; ++i) {
+        out[i] = avx512::SQ8UniformComputeCodesIP(query, codes + i * code_stride, dim);
+    }
+}
+
 float
 RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, float inv_sqrt_d) {
 #if defined(ENABLE_AVX512)
@@ -1075,6 +1087,131 @@ RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, floa
     return result;
 #else
     return avx2::RaBitQFloatBinaryIP(vector, bits, dim, inv_sqrt_d);
+#endif
+}
+
+void
+RaBitQFloatBinaryIPBatch4(const float* vector,
+                          const uint8_t* bits1,
+                          const uint8_t* bits2,
+                          const uint8_t* bits3,
+                          const uint8_t* bits4,
+                          uint64_t dim,
+                          float inv_sqrt_d,
+                          float* results) {
+#if defined(ENABLE_AVX512)
+    if (dim == 0) {
+        results[0] = 0.0F;
+        results[1] = 0.0F;
+        results[2] = 0.0F;
+        results[3] = 0.0F;
+        return;
+    }
+    if (dim < 16) {
+        avx2::RaBitQFloatBinaryIPBatch4(
+            vector, bits1, bits2, bits3, bits4, dim, inv_sqrt_d, results);
+        return;
+    }
+
+    const __m512 pos = inv_sqrt_d > 1e-3F ? _mm512_set1_ps(inv_sqrt_d) : _mm512_set1_ps(1.0F);
+    const __m512 neg = inv_sqrt_d > 1e-3F ? _mm512_set1_ps(-inv_sqrt_d) : _mm512_setzero_ps();
+    __m512 sums[4] = {
+        _mm512_setzero_ps(), _mm512_setzero_ps(), _mm512_setzero_ps(), _mm512_setzero_ps()};
+    const uint8_t* bits[4] = {bits1, bits2, bits3, bits4};
+
+    uint64_t d = 0;
+    for (; d + 16 <= dim; d += 16) {
+        const __m512 vec = _mm512_loadu_ps(vector + d);
+        const uint64_t byte_id = d >> 3;
+        for (uint32_t i = 0; i < 4; ++i) {
+            const auto mask =
+                static_cast<__mmask16>(static_cast<uint16_t>(bits[i][byte_id]) |
+                                       (static_cast<uint16_t>(bits[i][byte_id + 1]) << 8));
+            const __m512 binary = _mm512_mask_blend_ps(mask, neg, pos);
+            sums[i] = _mm512_fmadd_ps(binary, vec, sums[i]);
+        }
+    }
+
+    for (uint32_t i = 0; i < 4; ++i) {
+        results[i] = _mm512_reduce_add_ps(sums[i]);
+    }
+    if (d < dim) {
+        float tail[4];
+        avx2::RaBitQFloatBinaryIPBatch4(vector + d,
+                                        bits1 + (d >> 3),
+                                        bits2 + (d >> 3),
+                                        bits3 + (d >> 3),
+                                        bits4 + (d >> 3),
+                                        dim - d,
+                                        inv_sqrt_d,
+                                        tail);
+        for (uint32_t i = 0; i < 4; ++i) {
+            results[i] += tail[i];
+        }
+    }
+#else
+    avx2::RaBitQFloatBinaryIPBatch4(vector, bits1, bits2, bits3, bits4, dim, inv_sqrt_d, results);
+#endif
+}
+
+float
+RaBitQFloatSplitCodeIP(const float* vector,
+                       const uint8_t* one_bit_code,
+                       const uint8_t* supplement_code,
+                       uint64_t dim,
+                       uint32_t supplement_bits) {
+#if defined(ENABLE_AVX512)
+    if (dim == 0) {
+        return 0.0F;
+    }
+
+    const uint64_t plane_bytes = (dim + 7) / 8;
+    __m512 sum = _mm512_setzero_ps();
+
+    uint64_t d = 0;
+    for (; d + 16 <= dim; d += 16) {
+        const uint64_t byte_idx = d >> 3;
+        __m512 code = _mm512_setzero_ps();
+
+        for (uint32_t bit = 0; bit < supplement_bits; ++bit) {
+            const auto* plane = supplement_code + static_cast<uint64_t>(bit) * plane_bytes;
+            const auto mask =
+                static_cast<__mmask16>(static_cast<uint16_t>(plane[byte_idx]) |
+                                       (static_cast<uint16_t>(plane[byte_idx + 1]) << 8));
+            const __m512 weight = _mm512_set1_ps(static_cast<float>(1U << bit));
+            code = _mm512_mask_add_ps(code, mask, code, weight);
+        }
+
+        const auto one_bit_mask =
+            static_cast<__mmask16>(static_cast<uint16_t>(one_bit_code[byte_idx]) |
+                                   (static_cast<uint16_t>(one_bit_code[byte_idx + 1]) << 8));
+        const __m512 one_bit_weight = _mm512_set1_ps(static_cast<float>(1U << supplement_bits));
+        code = _mm512_mask_add_ps(code, one_bit_mask, code, one_bit_weight);
+
+        const __m512 vec = _mm512_loadu_ps(vector + d);
+        sum = _mm512_fmadd_ps(code, vec, sum);
+    }
+
+    float result = _mm512_reduce_add_ps(sum);
+
+    const uint32_t one_bit_scalar_weight = 1U << supplement_bits;
+    for (; d < dim; ++d) {
+        const uint64_t byte_idx = d >> 3;
+        const uint8_t bit_mask = static_cast<uint8_t>(1U << (d & 7));
+        uint32_t code = (one_bit_code[byte_idx] & bit_mask) != 0 ? one_bit_scalar_weight : 0U;
+        for (uint32_t bit = 0; bit < supplement_bits; ++bit) {
+            const auto* plane = supplement_code + static_cast<uint64_t>(bit) * plane_bytes;
+            if ((plane[byte_idx] & bit_mask) != 0) {
+                code += 1U << bit;
+            }
+        }
+        result += vector[d] * static_cast<float>(code);
+    }
+
+    return result;
+#else
+    return avx2::RaBitQFloatSplitCodeIP(
+        vector, one_bit_code, supplement_code, dim, supplement_bits);
 #endif
 }
 
@@ -1453,4 +1590,75 @@ FHTRotate(float* data, uint64_t dim_) {
     return generic::FHTRotate(data, dim_);
 #endif
 }
+
+float
+NormalizeWithCentroid(const float* from, const float* centroid, float* to, uint64_t dim) {
+#if defined(ENABLE_AVX512)
+    float norm_sq = 0;
+    uint64_t i = 0;
+    if (dim >= 16) {
+        __m512 sum = _mm512_setzero_ps();
+        for (; i + 15 < dim; i += 16) {
+            __m512 f = _mm512_loadu_ps(from + i);
+            __m512 c = _mm512_loadu_ps(centroid + i);
+            __m512 diff = _mm512_sub_ps(f, c);
+            sum = _mm512_fmadd_ps(diff, diff, sum);
+        }
+        norm_sq = _mm512_reduce_add_ps(sum);
+        for (; i < dim; ++i) {
+            auto diff = from[i] - centroid[i];
+            norm_sq += diff * diff;
+        }
+    } else {
+        norm_sq = generic::FP32ComputeL2Sqr(from, centroid, dim);
+    }
+
+    float norm = 0;
+    if (norm_sq < 1e-5f) {
+        norm = 1.0f;
+    } else {
+        norm = std::sqrt(norm_sq);
+    }
+
+    __m512 normVec = _mm512_set1_ps(norm);
+    for (i = 0; i + 15 < dim; i += 16) {
+        __m512 f = _mm512_loadu_ps(from + i);
+        __m512 c = _mm512_loadu_ps(centroid + i);
+        __m512 diff = _mm512_sub_ps(f, c);
+        __m512 result = _mm512_div_ps(diff, normVec);
+        _mm512_storeu_ps(to + i, result);
+    }
+    if (i < dim) {
+        for (; i < dim; ++i) {
+            to[i] = (from[i] - centroid[i]) / norm;
+        }
+    }
+    return norm;
+#else
+    return avx2::NormalizeWithCentroid(from, centroid, to, dim);
+#endif
+}
+
+void
+InverseNormalizeWithCentroid(
+    const float* from, const float* centroid, float* to, uint64_t dim, float norm) {
+#if defined(ENABLE_AVX512)
+    uint64_t i = 0;
+    __m512 normVec = _mm512_set1_ps(norm);
+    for (; i + 15 < dim; i += 16) {
+        __m512 f = _mm512_loadu_ps(from + i);
+        __m512 c = _mm512_loadu_ps(centroid + i);
+        __m512 result = _mm512_fmadd_ps(f, normVec, c);
+        _mm512_storeu_ps(to + i, result);
+    }
+    if (i < dim) {
+        for (; i < dim; ++i) {
+            to[i] = from[i] * norm + centroid[i];
+        }
+    }
+#else
+    avx2::InverseNormalizeWithCentroid(from, centroid, to, dim, norm);
+#endif
+}
+
 }  // namespace vsag::avx512
