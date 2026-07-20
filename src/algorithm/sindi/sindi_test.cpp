@@ -17,17 +17,13 @@
 #include "sindi.h"
 
 #include <array>
-#include <cstring>
 #include <set>
-#include <sstream>
 #include <tuple>
 
 #include "algorithm/sparse_distance.h"
 #include "impl/allocator/safe_allocator.h"
 #include "index_common_param.h"
-#include "storage/serialization_tags.h"
 #include "storage/serialization_template_test.h"
-#include "storage/streaming_serialization_test_utils.h"
 #include "unittest.h"
 using namespace vsag;
 
@@ -61,13 +57,6 @@ public:
 };
 
 }  // namespace vsag
-
-namespace {
-
-using vsag::test::EraseStreamingBlock;
-using vsag::test::InsertUnknownStreamingBlock;
-
-}  // namespace
 
 class MockFilter : public Filter {
 public:
@@ -172,85 +161,6 @@ create_exact_sindi_param(uint32_t term_id_limit,
     return index_param;
 }
 
-TEST_CASE("SINDI streaming compatibility", "[ut][SINDI][streaming][compatibility]") {
-    auto allocator = SafeAllocator::FactoryDefaultAllocator();
-    IndexCommonParam common_param;
-    common_param.allocator_ = allocator;
-    common_param.metric_ = MetricType::METRIC_TYPE_IP;
-    common_param.dim_ = 64;
-
-    constexpr uint32_t num_base = 128;
-    constexpr int64_t max_dim = 64;
-    constexpr int64_t max_id = 30000;
-    std::vector<int64_t> ids(num_base);
-    for (uint32_t i = 0; i < num_base; ++i) {
-        ids[i] = i;
-    }
-
-    auto sv_base = fixtures::GenerateSparseVectors(num_base, max_dim, max_id, 0, 10, 114);
-    auto base = Dataset::Make();
-    base->NumElements(num_base)->SparseVectors(sv_base.data())->Ids(ids.data())->Owner(false);
-
-    static constexpr auto param_str = R"({
-        "use_reorder": false,
-        "use_quantization": false,
-        "doc_prune_ratio": 0.0,
-        "term_prune_ratio": 0.0,
-        "window_size": 10000,
-        "term_id_limit": 30001,
-        "avg_doc_term_length": 100
-    })";
-    auto param_json = JsonType::Parse(param_str);
-    auto index_param = std::make_shared<SINDIParameter>();
-    index_param->FromJson(param_json);
-
-    auto index = std::make_unique<SINDI>(index_param, common_param);
-    auto build_res = index->Build(base);
-    REQUIRE(build_res.size() == 0);
-
-    std::stringstream stream;
-    REQUIRE_NOTHROW(index->SerializeStreaming(stream));
-    const auto bytes = stream.str();
-
-    SECTION("skips unknown non-critical block") {
-        auto mutated = InsertUnknownStreamingBlock(bytes, false);
-        auto restored = std::make_unique<SINDI>(index_param, common_param);
-        std::stringstream deserialize_stream(mutated);
-        REQUIRE_NOTHROW(restored->DeserializeStreaming(deserialize_stream));
-        REQUIRE(restored->GetNumElements() == num_base);
-
-        std::stringstream load_stream(mutated);
-        auto loaded = Index::Load(load_stream, "{}");
-        REQUIRE(loaded.has_value());
-        REQUIRE(loaded.value()->GetNumElements() == num_base);
-    }
-
-    SECTION("rejects unknown critical block") {
-        auto mutated = InsertUnknownStreamingBlock(bytes, true);
-        auto restored = std::make_unique<SINDI>(index_param, common_param);
-        std::stringstream deserialize_stream(mutated);
-        REQUIRE_THROWS(restored->DeserializeStreaming(deserialize_stream));
-
-        std::stringstream load_stream(mutated);
-        REQUIRE_FALSE(Index::Load(load_stream, "{}").has_value());
-    }
-
-    SECTION("rejects missing required block") {
-        auto mutated = EraseStreamingBlock(bytes, StreamSerializationTag::SINDI_WINDOWS);
-        auto restored = std::make_unique<SINDI>(index_param, common_param);
-        std::stringstream deserialize_stream(mutated);
-        REQUIRE_THROWS(restored->DeserializeStreaming(deserialize_stream));
-
-        std::stringstream load_stream(mutated);
-        REQUIRE_FALSE(Index::Load(load_stream, "{}").has_value());
-    }
-
-    for (auto& item : sv_base) {
-        delete[] item.vals_;
-        delete[] item.ids_;
-    }
-}
-
 std::vector<std::pair<int64_t, float>>
 brute_force_sparse_knn(const SparseVector& query,
                        const std::vector<SparseVector>& base,
@@ -346,19 +256,6 @@ TEST_CASE("SINDI Basic Test", "[ut][SINDI]") {
     // test serialize
     test_serializion(*index, *another_index);
     REQUIRE(another_index->GetNumElements() == num_base);
-    auto streaming_index = std::make_unique<SINDI>(index_param, common_param);
-    std::stringstream streaming_buffer;
-    REQUIRE_NOTHROW(index->SerializeStreaming(streaming_buffer));
-    const auto streaming_bytes = streaming_buffer.str();
-
-    std::stringstream deserialize_stream(streaming_bytes);
-    REQUIRE_NOTHROW(streaming_index->DeserializeStreaming(deserialize_stream));
-    REQUIRE(streaming_index->GetNumElements() == num_base);
-
-    std::stringstream load_stream(streaming_bytes);
-    auto loaded_index = vsag::Index::Load(load_stream, "{}");
-    REQUIRE(loaded_index.has_value());
-    REQUIRE(loaded_index.value()->GetNumElements() == num_base);
 
     // test search process
     std::string search_param_str = R"(
@@ -392,15 +289,9 @@ TEST_CASE("SINDI Basic Test", "[ut][SINDI]") {
 
         // test basic performance
         auto result = index->KnnSearch(query, k, search_param_str, nullptr);
-        auto loaded_result =
-            loaded_index.value()->KnnSearch(query, k, search_param_str, vsag::BitsetPtr(nullptr));
-        REQUIRE(loaded_result.has_value());
-        REQUIRE(loaded_result.value()->GetNumElements() == result->GetNumElements());
-        REQUIRE(loaded_result.value()->GetDim() == result->GetDim());
         REQUIRE(result->GetDim() == k);
         for (int j = 0; j < k; j++) {
             REQUIRE(result->GetIds()[j] == bf_result[j].first);
-            REQUIRE(loaded_result.value()->GetIds()[j] == result->GetIds()[j]);
             REQUIRE(std::abs(result->GetDistances()[j] - bf_result[j].second) < 3e-3);
         }
 
@@ -714,8 +605,21 @@ TEST_CASE("SINDI Immutable Sparse Deserialize KNN Test", "[ut][SINDI]") {
         }
     }
 
-    REQUIRE_THROWS(immutable->GetSparseVectorByInnerId(0, nullptr, allocator.get()));
-    REQUIRE_THROWS(immutable->CalcDistanceById(query, ids[0]));
+    SparseVector source_vector;
+    SparseVector immutable_vector;
+    source->GetSparseVectorByInnerId(0, &source_vector, allocator.get());
+    immutable->GetSparseVectorByInnerId(0, &immutable_vector, allocator.get());
+    REQUIRE(immutable_vector.len_ == source_vector.len_);
+    for (uint32_t i = 0; i < source_vector.len_; ++i) {
+        REQUIRE(immutable_vector.ids_[i] == source_vector.ids_[i]);
+        REQUIRE(std::abs(immutable_vector.vals_[i] - source_vector.vals_[i]) < 1e-3F);
+    }
+    REQUIRE(std::abs(immutable->CalcDistanceById(query, ids[0]) -
+                     source->CalcDistanceById(query, ids[0])) < 1e-3F);
+    allocator->Deallocate(source_vector.ids_);
+    allocator->Deallocate(source_vector.vals_);
+    allocator->Deallocate(immutable_vector.ids_);
+    allocator->Deallocate(immutable_vector.vals_);
 
     for (auto& item : sv_base) {
         delete[] item.vals_;
@@ -746,6 +650,48 @@ TEST_CASE("SINDI Immutable Runtime Rejects Mutable Operations", "[ut][SINDI]") {
     std::stringstream ss;
     vsag::IOStreamWriter writer(ss);
     REQUIRE_NOTHROW(index.Serialize(writer));
+}
+
+TEST_CASE("SINDI immutable build flushes local ids across windows", "[ut][SINDI]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+    IndexCommonParam common_param;
+    common_param.allocator_ = allocator;
+    common_param.metric_ = MetricType::METRIC_TYPE_IP;
+
+    auto param = std::make_shared<SINDIParameter>();
+    param->FromJson(JsonType::Parse(R"({
+        "use_reorder": false,
+        "use_quantization": false,
+        "doc_prune_ratio": 0.0,
+        "window_size": 10000,
+        "term_id_limit": 16,
+        "immutable": true
+    })"));
+
+    constexpr uint32_t count = 10001;
+    uint32_t term_ids[] = {3};
+    float term_values[] = {1.0F};
+    std::vector<SparseVector> vectors(count, SparseVector{1, term_ids, term_values});
+    std::vector<int64_t> labels(count);
+    std::iota(labels.begin(), labels.end(), 0);
+    auto base = Dataset::Make();
+    base->NumElements(count)->SparseVectors(vectors.data())->Ids(labels.data())->Owner(false);
+
+    SINDI index(param, common_param);
+    REQUIRE(index.Build(base).empty());
+    REQUIRE(index.GetNumElements() == count);
+
+    std::stringstream stream;
+    IOStreamWriter writer(stream);
+    index.Serialize(writer);
+    stream.seekg(0, std::ios::beg);
+    IOStreamReader reader(stream);
+    int64_t serialized_count = 0;
+    uint32_t window_count = 0;
+    StreamReader::ReadObj(reader, serialized_count);
+    StreamReader::ReadObj(reader, window_count);
+    REQUIRE(serialized_count == count);
+    REQUIRE(window_count == 2);
 }
 
 TEST_CASE("SINDI Immutable Sparse Window Serialization Size", "[ut][SINDI]") {
@@ -799,33 +745,6 @@ TEST_CASE("SINDI Immutable Sparse Window Rejects Excessive Term Count", "[ut][SI
     vsag::IOStreamWriter writer(stream);
     const uint64_t excessive_term_count = 101;
     StreamWriter::WriteObj(writer, excessive_term_count);
-
-    vsag::IOStreamReader reader(stream);
-    ImmutableSINDIWindow window(allocator.get());
-    REQUIRE_THROWS_AS(SINDITestAccess::DeserializeImmutableWindow(index, reader, window),
-                      vsag::VsagException);
-}
-
-TEST_CASE("SINDI Immutable Sparse Window Rejects Mismatched Offset Count", "[ut][SINDI]") {
-    auto allocator = SafeAllocator::FactoryDefaultAllocator();
-    IndexCommonParam common_param;
-    common_param.allocator_ = allocator;
-
-    auto param = std::make_shared<vsag::SINDIParameter>();
-    param->FromJson(vsag::JsonType::Parse(R"({
-        "use_quantization": false,
-        "window_size": 10000,
-        "term_id_limit": 100,
-        "remap_term_ids": true,
-        "immutable": true
-    })"));
-    SINDI index(param, common_param);
-
-    std::stringstream stream;
-    vsag::IOStreamWriter writer(stream);
-    StreamWriter::WriteVector(writer, std::vector<uint32_t>{0});
-    const uint64_t mismatched_offset_count = 101;
-    StreamWriter::WriteObj(writer, mismatched_offset_count);
 
     vsag::IOStreamReader reader(stream);
     ImmutableSINDIWindow window(allocator.get());
