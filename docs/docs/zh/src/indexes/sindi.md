@@ -103,12 +103,13 @@ auto result = index->KnnSearch(
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `dim` | int | —（必填） | 单条稀疏向量允许的最大非零项数量，**不是** 词表大小 |
-| `term_id_limit` | int | `1000000` | 词项 ID 的上界（应 ≥ 最大词项 ID + 1）；`sindi` 最高 50 000 000，`sindi_v2` 最高 10 000 000 |
+| `term_id_limit` | int | `1000000` | 词项 ID 的上界（应 ≥ 最大词项 ID + 1）；`sindi` 和 `sindi_v2` 最高均为 50 000 000 |
 | `window_size` | int | `50000` | 每个窗口容纳的文档数（取值范围 10 000 – 60 000） |
 | `doc_prune_ratio` | float | `0.0` | 构建阶段按文档丢弃权重最低词项的比例（0.0 – 0.9） |
 | `use_quantization` | bool / string | `false` | 设为 `true` 时使用 8-bit 标量量化（SQ8），设为 `"fp16"` 时使用半精度值 |
 | `use_reorder` | bool | `false` | 是否保留一份高精度扁平副本用于精排（内存约翻倍） |
 | `rerank_type` | string | `"fp32"` | `use_reorder` 开启时使用的正排存储类型。`fp32` 保留精确值；`dmq8` 使用压缩的 8-bit DMQ 编码 |
+| `dmq_shared_codebook_threshold` | int | `1024` | `rerank_type: "dmq8"` 时，出现次数不超过该值的 term 共用一个 codebook；更高频的 term 保持独立 codebook。设为 `0` 可关闭共享 |
 | `remap_term_ids` | bool | `false` | 是否在建索引前重映射词项 ID，适用于词项 ID 很稀疏或存在大量空洞的词表 |
 | `immutable` | bool | `false` | 构建紧凑只读 DataCell；不支持后续 Add |
 | `avg_doc_term_length` | int | `100` | 仅用于内存估算 |
@@ -121,6 +122,9 @@ auto result = index->KnnSearch(
 | `rerank_io` | object | `{"type": "block_memory_io"}` | 开启 `use_reorder` 时保存精排向量的后端；文件后端未配置 `file_path` 时，默认使用 `<term_io.file_path>.rerank` |
 | `rerank_layout` | string | `"none"` | 精排向量布局，可选 `"none"` 或 `"top_terms_signature"`；后者要求 `use_reorder: true` |
 | `rerank_layout_top_terms` | int | `16` | `"top_terms_signature"` 使用的前导 term 数量，必须为正整数 |
+
+SINDI V2 使用 `rerank_type: "dmq8"` 时，目前要求精排后端为默认的内存
+`block_memory_io`，并且 `rerank_layout` 必须为 `"none"`。
 
 查询参数应放在与入口同名的子对象下：`sindi` 使用 `{"sindi": {...}}`，
 `sindi_v2` 使用 `{"sindi_v2": {...}}`。

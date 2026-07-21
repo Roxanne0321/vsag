@@ -67,10 +67,8 @@ public:
     void
     InitFeatures() override;
 
-    std::string
-    GetMemoryUsageDetail() const override {
-        return "";
-    }
+    std::unordered_map<std::string, uint64_t>
+    GetMemoryUsageDetail() const override;
 
     std::string
     GetStats() const override;
@@ -155,7 +153,8 @@ public:
     CalDistanceById(const DatasetPtr& query,
                     const int64_t* ids,
                     int64_t count,
-                    bool calculate_precise_distance = true) const override;
+                    bool calculate_precise_distance = true,
+                    int64_t topk = -1) const override;
 
     std::pair<int64_t, int64_t>
     GetMinAndMaxId() const override;
@@ -200,6 +199,29 @@ private:
     std::pair<int64_t, int64_t>
     get_min_max_window_id(const FilterPtr& filter) const;
 
+    MetadataPtr
+    collect_streaming_header() const override;
+
+    void
+    serialize_streaming_body(StreamWriter& writer) const override;
+
+    void
+    deserialize_streaming_body(StreamReader& reader, const MetadataPtr& metadata) override;
+
+    void
+    load_streaming_body(StreamReader& reader,
+                        const MetadataPtr& metadata,
+                        const LoadParameters& parameters) override;
+
+    void
+    read_streaming_body(StreamReader& reader, const MetadataPtr& metadata);
+
+    void
+    serialize_windows(StreamWriter& writer) const;
+
+    void
+    deserialize_windows(StreamReader& reader_ref);
+
     void
     deserialize_immutable_window(StreamReader& reader_ref, ImmutableSINDIWindow& window) const;
 
@@ -217,6 +239,15 @@ private:
 
     void
     flush_immutable_staging();
+
+    SparseVector
+    sort_and_prune_sparse_vector_for_build(const SparseVector& input,
+                                           Vector<std::pair<uint32_t, float>>& sorted_terms,
+                                           Vector<uint32_t>& pruned_ids,
+                                           Vector<float>& pruned_vals) const;
+
+    void
+    init_quantization_params_from_pruned_vectors(const DatasetPtr& base);
 
     /// Recalculate and cache the memory-usage counter.
     void
@@ -260,6 +291,9 @@ private:
     FlattenInterfacePtr rerank_flat_{nullptr};  // re-rank back-end
 
     SparseValueQuantizationType sparse_value_quant_type_{SparseValueQuantizationType::FP32};
+
+    std::string rerank_type_{"fp32"};
+    uint32_t dmq_shared_codebook_threshold_{DEFAULT_SPARSE_DMQ_SHARED_CODEBOOK_THRESHOLD};
 
     bool deserialize_without_footer_{false};  // backward-compat: old format lacks footer
     bool deserialize_without_buffer_{false};  // backward-compat: old format lacks buffer
