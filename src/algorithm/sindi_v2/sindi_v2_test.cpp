@@ -24,6 +24,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <numeric>
 #include <sstream>
@@ -755,6 +756,83 @@ TEST_CASE("SINDIV2 immutable memory load keeps pruned remap dictionary consisten
     uint32_t retained_term = 100;
     sparse_query.ids_ = &retained_term;
     REQUIRE(std::abs(loaded.CalcDistanceById(query, label, false)) < 1e-6F);
+}
+
+TEST_CASE("SINDIV2 immutable build streams file-backed rerank in batches", "[ut][SINDIV2]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+    IndexCommonParam common_param;
+    common_param.allocator_ = allocator;
+    common_param.metric_ = MetricType::METRIC_TYPE_IP;
+    common_param.dim_ = 64;
+
+    constexpr uint32_t base_count = 5000;
+    constexpr uint32_t term_id_limit = 128;
+    auto sparse_vectors =
+        fixtures::GenerateSparseVectors(base_count, common_param.dim_, term_id_limit - 1);
+    std::vector<int64_t> labels(base_count);
+    std::iota(labels.begin(), labels.end(), 0);
+    auto base = Dataset::Make();
+    base->NumElements(base_count)
+        ->SparseVectors(sparse_vectors.data())
+        ->Ids(labels.data())
+        ->Owner(false);
+
+    fixtures::TempDir dir("sindi_v2_streaming_rerank");
+    const auto rerank_path = dir.GenerateRandomFile(false);
+    auto build_parameter = std::make_shared<SINDIV2Parameter>();
+    build_parameter->FromJson(JsonType::Parse(fmt::format(R"({{
+        "term_id_limit": {},
+        "window_size": 10000,
+        "doc_prune_ratio": 0.3,
+        "use_quantization": "fp16",
+        "use_reorder": true,
+        "remap_term_ids": true,
+        "immutable": true,
+        "term_io": {{"type": "memory_io"}},
+        "rerank_io": {{"type": "buffer_io", "file_path": "{}"}}
+    }})",
+                                                          term_id_limit,
+                                                          rerank_path)));
+
+    SINDIV2 built(build_parameter, common_param);
+    REQUIRE(built.Build(base).empty());
+    REQUIRE(std::filesystem::file_size(rerank_path) > 0);
+
+    std::vector<float> expected_distances;
+    auto query = Dataset::Make();
+    query->NumElements(1)->SparseVectors(sparse_vectors.data())->Owner(false);
+    for (uint32_t i = 0; i < 10; ++i) {
+        expected_distances.push_back(built.CalcDistanceById(query, labels[i], false));
+    }
+
+    std::stringstream stream;
+    IOStreamWriter writer(stream);
+    built.Serialize(writer);
+
+    auto load_parameter = std::make_shared<SINDIV2Parameter>();
+    load_parameter->FromJson(JsonType::Parse(R"({
+        "term_id_limit": 128,
+        "window_size": 10000,
+        "doc_prune_ratio": 0.3,
+        "use_quantization": "fp16",
+        "use_reorder": true,
+        "remap_term_ids": true,
+        "immutable": true,
+        "term_io": {"type": "memory_io"},
+        "rerank_io": {"type": "block_memory_io"}
+    })"));
+    SINDIV2 loaded(load_parameter, common_param);
+    stream.seekg(0, std::ios::beg);
+    REQUIRE_NOTHROW(loaded.Deserialize(stream));
+    for (uint32_t i = 0; i < expected_distances.size(); ++i) {
+        REQUIRE(std::abs(loaded.CalcDistanceById(query, labels[i], false) - expected_distances[i]) <
+                1e-6F);
+    }
+
+    for (auto& vector : sparse_vectors) {
+        delete[] vector.ids_;
+        delete[] vector.vals_;
+    }
 }
 
 TEST_CASE("SINDIV2 validates terms before document pruning", "[ut][SINDIV2]") {

@@ -142,6 +142,11 @@ void
 SparseVectorDataCell<QuantTmpl, IOTmpl>::BatchInsertVector(const void* vectors,
                                                            InnerIdType count,
                                                            InnerIdType* idx_vec) {
+    if (count == 0) {
+        return;
+    }
+    CHECK_ARGUMENT(vectors != nullptr, "sparse vectors must not be null");
+
     const auto* sparse_array = reinterpret_cast<const SparseVector*>(vectors);
     Vector<InnerIdType> idx_ptr(count, allocator_);
     if (idx_vec == nullptr) {
@@ -150,8 +155,76 @@ SparseVectorDataCell<QuantTmpl, IOTmpl>::BatchInsertVector(const void* vectors,
             idx_vec[i] = total_count_ + i;
         }
     }
-    for (InnerIdType i = 0; i < count; ++i) {
-        this->InsertVector(sparse_array + i, idx_vec[i]);
+
+    constexpr InnerIdType MAX_BATCH_COUNT = 4096;
+    const auto insert_batch = [this](const SparseVector* batch_vectors,
+                                     InnerIdType batch_count,
+                                     const InnerIdType* batch_ids) {
+        Vector<uint64_t> code_offsets(static_cast<uint64_t>(batch_count) + 1, allocator_);
+        uint64_t total_code_size = 0;
+        uint64_t batch_max_code_size = 0;
+        for (InnerIdType i = 0; i < batch_count; ++i) {
+            code_offsets[i] = total_code_size;
+            const uint64_t code_size =
+                (static_cast<uint64_t>(batch_vectors[i].len_) * 2 + 1) * sizeof(uint32_t);
+            if (code_size > std::numeric_limits<uint32_t>::max()) {
+                throw VsagException(
+                    ErrorType::INVALID_ARGUMENT,
+                    fmt::format("sparse vector code size {} exceeds uint32_t limit", code_size));
+            }
+            CHECK_ARGUMENT(total_code_size <= std::numeric_limits<uint64_t>::max() - code_size,
+                           "sparse vector batch code size overflow");
+            total_code_size += code_size;
+            batch_max_code_size = std::max(batch_max_code_size, code_size);
+        }
+        code_offsets[batch_count] = total_code_size;
+
+        Vector<uint8_t> codes(total_code_size, allocator_);
+        for (InnerIdType i = 0; i < batch_count; ++i) {
+            quantizer_->EncodeOne(reinterpret_cast<const float*>(batch_vectors + i),
+                                  codes.data() + code_offsets[i]);
+        }
+
+        Vector<DocLocation> locations(batch_count, allocator_);
+        std::scoped_lock lock(mutex_, current_offset_mutex_);
+        CHECK_ARGUMENT(current_offset_ <= std::numeric_limits<uint64_t>::max() - total_code_size,
+                       "sparse vector payload offset overflow");
+        const uint64_t batch_offset = current_offset_;
+        const uint64_t required_size = batch_offset + total_code_size;
+        if (required_size > this->io_->size_) {
+            this->io_->Resize(required_size);
+        }
+
+        bool contiguous_ids = true;
+        for (InnerIdType i = 0; i < batch_count; ++i) {
+            const uint64_t code_size = code_offsets[i + 1] - code_offsets[i];
+            locations[i].offset = batch_offset + code_offsets[i];
+            locations[i].size = static_cast<uint32_t>(code_size);
+            total_count_ = std::max(total_count_, batch_ids[i] + 1);
+            if (i > 0 && batch_ids[i] != batch_ids[0] + i) {
+                contiguous_ids = false;
+            }
+        }
+
+        if (contiguous_ids) {
+            offset_io_->Write(reinterpret_cast<const uint8_t*>(locations.data()),
+                              static_cast<uint64_t>(batch_count) * sizeof(DocLocation),
+                              static_cast<uint64_t>(batch_ids[0]) * sizeof(DocLocation));
+        } else {
+            for (InnerIdType i = 0; i < batch_count; ++i) {
+                offset_io_->Write(reinterpret_cast<const uint8_t*>(locations.data() + i),
+                                  sizeof(DocLocation),
+                                  static_cast<uint64_t>(batch_ids[i]) * sizeof(DocLocation));
+            }
+        }
+        io_->Write(codes.data(), total_code_size, batch_offset);
+        current_offset_ = required_size;
+        max_code_size_ = std::max(max_code_size_, batch_max_code_size);
+    };
+
+    for (InnerIdType start = 0; start < count; start += MAX_BATCH_COUNT) {
+        const InnerIdType batch_count = std::min(MAX_BATCH_COUNT, count - start);
+        insert_batch(sparse_array + start, batch_count, idx_vec + start);
     }
 }
 
