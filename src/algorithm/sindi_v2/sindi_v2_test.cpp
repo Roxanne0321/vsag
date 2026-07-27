@@ -24,6 +24,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <numeric>
 #include <sstream>
@@ -755,6 +756,146 @@ TEST_CASE("SINDIV2 immutable memory load keeps pruned remap dictionary consisten
     uint32_t retained_term = 100;
     sparse_query.ids_ = &retained_term;
     REQUIRE(std::abs(loaded.CalcDistanceById(query, label, false)) < 1e-6F);
+}
+
+TEST_CASE("SINDIV2 file-backed rerank roundtrip matches memory build", "[ut][SINDIV2]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+    IndexCommonParam common_param;
+    common_param.allocator_ = allocator;
+    common_param.metric_ = MetricType::METRIC_TYPE_IP;
+    common_param.dim_ = 64;
+
+    constexpr uint32_t base_count = 5000;
+    constexpr uint32_t term_id_limit = 128;
+    constexpr int64_t result_count = 50;
+    constexpr float distance_epsilon = 1e-5F;
+    auto sparse_vectors =
+        fixtures::GenerateSparseVectors(base_count, common_param.dim_, term_id_limit - 1);
+    std::vector<int64_t> labels(base_count);
+    std::iota(labels.begin(), labels.end(), 0);
+    auto base = Dataset::Make();
+    base->NumElements(base_count)
+        ->SparseVectors(sparse_vectors.data())
+        ->Ids(labels.data())
+        ->Owner(false);
+
+    fixtures::TempDir dir("sindi_v2_streaming_rerank");
+    const auto rerank_path = dir.GenerateRandomFile(false);
+    const auto make_parameter = [&](const std::string& rerank_io_json) {
+        auto parameter = std::make_shared<SINDIV2Parameter>();
+        parameter->FromJson(JsonType::Parse(fmt::format(R"({{
+            "term_id_limit": {},
+            "window_size": 10000,
+            "doc_prune_ratio": 0.3,
+            "use_quantization": "fp16",
+            "use_reorder": true,
+            "remap_term_ids": true,
+            "immutable": true,
+            "term_io": {{"type": "memory_io"}},
+            "rerank_io": {}
+        }})",
+                                                        term_id_limit,
+                                                        rerank_io_json)));
+        return parameter;
+    };
+
+    auto memory_build_parameter = make_parameter(R"({"type": "block_memory_io"})");
+    auto file_build_parameter =
+        make_parameter(fmt::format(R"({{"type": "buffer_io", "file_path": "{}"}})", rerank_path));
+    SINDIV2 memory_built(memory_build_parameter, common_param);
+    SINDIV2 file_built(file_build_parameter, common_param);
+    REQUIRE(memory_built.Build(base).empty());
+    REQUIRE(file_built.Build(base).empty());
+    REQUIRE(std::filesystem::file_size(rerank_path) > 0);
+
+    const auto serialize = [](const SINDIV2& index) {
+        std::stringstream stream;
+        IOStreamWriter writer(stream);
+        index.Serialize(writer);
+        return stream.str();
+    };
+    const auto memory_serialized = serialize(memory_built);
+    const auto file_serialized = serialize(file_built);
+
+    // Creation parameters live in the footer and intentionally differ by IO type.
+    // Everything before the footer is the actual index payload and must be identical.
+    const auto payload_size = [](const std::string& serialized) {
+        constexpr size_t footer_trailer_size = sizeof(uint64_t) + 8;
+        REQUIRE(serialized.size() >= footer_trailer_size);
+        uint64_t footer_size = 0;
+        std::memcpy(&footer_size,
+                    serialized.data() + serialized.size() - footer_trailer_size,
+                    sizeof(footer_size));
+        REQUIRE(footer_size <= serialized.size());
+        return serialized.size() - static_cast<size_t>(footer_size);
+    };
+    const auto memory_payload_size = payload_size(memory_serialized);
+    const auto file_payload_size = payload_size(file_serialized);
+    REQUIRE(memory_payload_size == file_payload_size);
+    REQUIRE(memory_serialized.compare(
+                0, memory_payload_size, file_serialized, 0, file_payload_size) == 0);
+
+    SINDIV2 memory_loaded(make_parameter(R"({"type": "block_memory_io"})"), common_param);
+    SINDIV2 file_loaded(make_parameter(R"({"type": "block_memory_io"})"), common_param);
+    std::stringstream memory_stream(memory_serialized);
+    std::stringstream file_stream(file_serialized);
+    REQUIRE_NOTHROW(memory_loaded.Deserialize(memory_stream));
+    REQUIRE_NOTHROW(file_loaded.Deserialize(file_stream));
+
+    const std::string search_param = fmt::format(R"({{
+        "sindi_v2": {{
+            "query_prune_ratio": 0.0,
+            "term_prune_ratio": 0.0,
+            "n_candidate": {},
+            "use_term_lists_heap_insert": false
+        }}
+    }})",
+                                                 base_count);
+    const auto compare_results = [distance_epsilon](const DatasetPtr& lhs, const DatasetPtr& rhs) {
+        REQUIRE(lhs->GetDim() == rhs->GetDim());
+        std::vector<std::pair<int64_t, float>> lhs_by_id;
+        std::vector<std::pair<int64_t, float>> rhs_by_id;
+        lhs_by_id.reserve(lhs->GetDim());
+        rhs_by_id.reserve(rhs->GetDim());
+        for (int64_t i = 0; i < lhs->GetDim(); ++i) {
+            REQUIRE(std::abs(lhs->GetDistances()[i] - rhs->GetDistances()[i]) <= distance_epsilon);
+            lhs_by_id.emplace_back(lhs->GetIds()[i], lhs->GetDistances()[i]);
+            rhs_by_id.emplace_back(rhs->GetIds()[i], rhs->GetDistances()[i]);
+        }
+        std::sort(lhs_by_id.begin(), lhs_by_id.end());
+        std::sort(rhs_by_id.begin(), rhs_by_id.end());
+        for (size_t i = 0; i < lhs_by_id.size(); ++i) {
+            REQUIRE(lhs_by_id[i].first == rhs_by_id[i].first);
+            REQUIRE(std::abs(lhs_by_id[i].second - rhs_by_id[i].second) <= distance_epsilon);
+        }
+    };
+
+    const std::vector<uint32_t> query_indices = {0, 1, 17, 4095, 4096, 4097, base_count - 1};
+    for (const auto query_index : query_indices) {
+        auto query = Dataset::Make();
+        query->NumElements(1)->SparseVectors(sparse_vectors.data() + query_index)->Owner(false);
+
+        auto memory_knn = memory_loaded.KnnSearch(query, result_count, search_param, nullptr);
+        auto file_knn = file_loaded.KnnSearch(query, result_count, search_param, nullptr);
+        compare_results(memory_knn, file_knn);
+
+        auto memory_range =
+            memory_loaded.RangeSearch(query, 100.0F, search_param, nullptr, result_count);
+        auto file_range =
+            file_loaded.RangeSearch(query, 100.0F, search_param, nullptr, result_count);
+        compare_results(memory_range, file_range);
+
+        for (const auto label : labels) {
+            REQUIRE(std::abs(memory_loaded.CalcDistanceById(query, label, false) -
+                             file_loaded.CalcDistanceById(query, label, false)) <=
+                    distance_epsilon);
+        }
+    }
+
+    for (auto& vector : sparse_vectors) {
+        delete[] vector.ids_;
+        delete[] vector.vals_;
+    }
 }
 
 TEST_CASE("SINDIV2 validates terms before document pruning", "[ut][SINDIV2]") {
