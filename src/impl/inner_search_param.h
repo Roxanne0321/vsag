@@ -51,6 +51,10 @@ public:
     float skip_ratio{0.2F};
     FilterSearchSkipStrategyType skip_strategy_type{
         FilterSearchSkipStrategyType::DETERMINISTIC_ACCUMULATIVE};
+    bool use_pathseer{false};
+    uint32_t pathseer_expansion_limit{64};
+    float pathseer_vob{0.0F};
+    float pathseer_filter_cost_ratio{0.1F};
     InnerSearchMode search_mode{KNN_SEARCH};
     int range_search_limit_size{-1};
     int64_t parallel_search_thread_count{1};

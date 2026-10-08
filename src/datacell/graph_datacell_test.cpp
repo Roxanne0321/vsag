@@ -68,6 +68,54 @@ TEST_CASE("GraphDataCell Basic Test", "[ut][GraphDataCell]") {
     TestGraphDataCell(graph_param, common_param, is_support_delete);
 }
 
+TEST_CASE("GraphDataCell stores and restores PathSeer fusion zones",
+          "[ut][GraphDataCell][PathSeer]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+    IndexCommonParam common_param;
+    common_param.dim_ = 8;
+    common_param.allocator_ = allocator;
+
+    auto param = std::make_shared<GraphDataCellParameter>();
+    param->io_parameter_ = std::make_shared<MemoryIOParameter>();
+    param->max_degree_ = 2;
+    param->pathseer_total_degree_ = 5;
+    param->init_max_capacity_ = 4;
+    auto graph = GraphInterface::MakeInstance(param, common_param);
+    graph->Resize(4);
+
+    Vector<InnerIdType> sparse({1, 2}, allocator.get());
+    Vector<InnerIdType> expansion({3}, allocator.get());
+    graph->InsertPathSeerFusionNeighborsById(0, sparse, expansion);
+    Vector<InnerIdType> empty(allocator.get());
+    for (InnerIdType id = 1; id < 4; ++id) {
+        graph->InsertPathSeerFusionNeighborsById(id, empty, empty);
+    }
+
+    REQUIRE(graph->HasPathSeerFusionGraph());
+    REQUIRE(graph->MaximumDegree() == 2);
+    REQUIRE(graph->PathSeerTotalDegree() == 5);
+    Vector<InnerIdType> restored_sparse(allocator.get());
+    Vector<InnerIdType> restored_expansion(allocator.get());
+    graph->GetNeighbors(0, restored_sparse);
+    graph->GetPathSeerExpansionNeighbors(0, restored_expansion);
+    REQUIRE(restored_sparse == sparse);
+    REQUIRE(restored_expansion == expansion);
+
+    std::stringstream stream;
+    IOStreamWriter writer(stream);
+    graph->Serialize(writer);
+    stream.seekg(0, std::ios::beg);
+    IOStreamReader reader(stream);
+    auto restored = GraphInterface::MakeInstance(param, common_param);
+    restored->Deserialize(reader);
+    restored_sparse.clear();
+    restored_expansion.clear();
+    restored->GetNeighbors(0, restored_sparse);
+    restored->GetPathSeerExpansionNeighbors(0, restored_expansion);
+    REQUIRE(restored_sparse == sparse);
+    REQUIRE(restored_expansion == expansion);
+}
+
 TEST_CASE("GraphDataCell Remove Test", "[ut][GraphDataCell]") {
     auto allocator = SafeAllocator::FactoryDefaultAllocator();
     auto dim = GENERATE(32, 64);

@@ -20,8 +20,10 @@
 
 #include "datacell/flatten_interface.h"
 #include "datacell/graph_datacell_parameter.h"
+#include "datacell/graph_interface.h"
 #include "impl/filter/black_list_filter.h"
 #include "impl/filter/iterator_filter.h"
+#include "io/memory_io/memory_io_parameter.h"
 #include "searcher_test.h"
 #include "unittest.h"
 #include "utils/visited_list.h"
@@ -91,6 +93,91 @@ TEST_CASE("BasicSearcher supports KNN, range, filters, and empty data cells",
     REQUIRE(searcher.Search(graph, nullptr, vl, &query, param, LabelTablePtr{}, ctx)->Empty());
     REQUIRE(searcher.Search(nullptr, flatten, vl, &query, param, LabelTablePtr{}, ctx)->Empty());
     pool->ReturnOne(vl);
+}
+
+TEST_CASE("BasicSearcher PathSeer mixes sparse DFN and fusion expansion DOS",
+          "[ut][BasicSearcher][PathSeer]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+    IndexCommonParam common;
+    common.dim_ = 1;
+    common.allocator_ = allocator;
+    common.metric_ = MetricType::METRIC_TYPE_L2SQR;
+
+    constexpr const char* param_temp = R"({{"type": "{}"}})";
+    auto quantizer_param = QuantizerParameter::GetQuantizerParameterByJson(
+        JsonType::Parse(fmt::format(param_temp, "fp32")));
+    auto io_param =
+        IOParameter::GetIOParameterByJson(JsonType::Parse(fmt::format(param_temp, "memory_io")));
+    auto flatten = std::make_shared<
+        FlattenDataCell<FP32Quantizer<MetricType::METRIC_TYPE_L2SQR>, FixedLayout<MemoryIO>>>(
+        quantizer_param, io_param, common);
+    flatten->SetQuantizer(
+        std::make_shared<FP32Quantizer<MetricType::METRIC_TYPE_L2SQR>>(1, allocator.get()));
+    flatten->SetIO(std::make_unique<MemoryIO>(allocator.get()));
+
+    std::vector<float> vectors = {10.0F, 9.0F, 0.0F, 1.0F, 2.0F, 3.0F};
+    std::vector<InnerIdType> ids = {0, 1, 2, 3, 4, 5};
+    flatten->Train(vectors.data(), ids.size());
+    flatten->BatchInsertVector(vectors.data(), ids.size(), ids.data());
+
+    auto graph_param = std::make_shared<GraphDataCellParameter>();
+    graph_param->io_parameter_ = std::make_shared<MemoryIOParameter>();
+    graph_param->max_degree_ = 2;
+    graph_param->pathseer_total_degree_ = 5;
+    graph_param->init_max_capacity_ = ids.size();
+    auto graph = GraphInterface::MakeInstance(graph_param, common);
+    graph->Resize(ids.size());
+    Vector<InnerIdType> empty(allocator.get());
+    Vector<InnerIdType> sparse(allocator.get());
+    Vector<InnerIdType> expansion(allocator.get());
+    sparse = {1};
+    expansion = {2, 3, 4, 5};
+    graph->InsertPathSeerFusionNeighborsById(0, sparse, expansion);
+    sparse = {2};
+    graph->InsertPathSeerFusionNeighborsById(1, sparse, empty);
+    for (InnerIdType id = 2; id < ids.size(); ++id) {
+        graph->InsertPathSeerFusionNeighborsById(id, empty, empty);
+    }
+    auto pool = std::make_shared<VisitedListPool>(1, allocator.get(), ids.size(), allocator.get());
+    auto filter =
+        std::make_shared<WhiteListFilter>([](int64_t id) -> bool { return id == 2 or id == 4; });
+    BasicSearcher searcher(common);
+    float query = 0.0F;
+
+    auto run = [&](float vob, const FilterPtr& active_filter) {
+        InnerSearchParam param;
+        param.ep = 0;
+        param.ef = 1;
+        param.topk = 1;
+        param.is_inner_id_allowed = active_filter;
+        param.use_pathseer = true;
+        param.pathseer_expansion_limit = 4;
+        param.pathseer_vob = vob;
+        param.pathseer_filter_cost_ratio = 0.1F;
+        SearchStatistics stats;
+        QueryContext ctx{.alloc = allocator.get(), .stats = &stats};
+        auto vl = pool->TakeOne();
+        auto result = searcher.Search(graph, flatten, vl, &query, param, LabelTablePtr{}, &ctx);
+        pool->ReturnOne(vl);
+        return std::make_pair(result, stats.ToJson());
+    };
+
+    const auto [fixed_result, fixed_stats] = run(0.0F, filter);
+    REQUIRE(fixed_result->Size() == 1);
+    REQUIRE(fixed_result->Top().second == 2);
+    REQUIRE(fixed_stats["pathseer_expansion_checks"].GetUint64() == 4);
+    REQUIRE(fixed_stats["pathseer_expansion_matches"].GetUint64() == 2);
+
+    const auto [dynamic_result, dynamic_stats] = run(1.1F, filter);
+    REQUIRE(dynamic_result->Size() == 1);
+    REQUIRE(dynamic_result->Top().second == 2);
+    REQUIRE(dynamic_stats["pathseer_expansion_checks"].GetUint64() == 1);
+    REQUIRE(dynamic_stats["pathseer_expansion_matches"].GetUint64() == 1);
+
+    const auto [unfiltered_pathseer, unfiltered_stats] = run(0.0F, nullptr);
+    REQUIRE(unfiltered_pathseer->Size() == 1);
+    REQUIRE(unfiltered_pathseer->Top().second == 2);
+    REQUIRE(unfiltered_stats["pathseer_expansion_checks"].GetUint64() == 0);
 }
 
 TEST_CASE("Search with stored vector ID", "[ut][BasicSearcher][DistanceProvider]") {

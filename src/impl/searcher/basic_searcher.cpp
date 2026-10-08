@@ -586,15 +586,20 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
     uint32_t hops = 0;
     uint32_t dist_cmp = 0;
     uint32_t count_no_visited = 0;
-    Vector<InnerIdType> to_be_visited_id(graph->MaximumDegree(), alloc);
+    const bool pathseer_active =
+        inner_search_param.use_pathseer and graph->HasPathSeerFusionGraph() and
+        (is_id_allowed != nullptr or not inner_search_param.executors.empty());
+    const uint64_t visit_capacity =
+        pathseer_active ? graph->PathSeerTotalDegree() : graph->MaximumDegree();
+    Vector<InnerIdType> to_be_visited_id(visit_capacity, alloc);
     Vector<InnerIdType> neighbors(graph->MaximumDegree(), alloc);
-    Vector<float> line_dists(graph->MaximumDegree(), alloc);
-    Vector<float> lower_bound_dists(graph->MaximumDegree(), alloc);
+    Vector<InnerIdType> expansion_neighbors(pathseer_active ? visit_capacity : 0, alloc);
+    Vector<float> line_dists(visit_capacity, alloc);
+    Vector<float> lower_bound_dists(visit_capacity, alloc);
     const uint64_t custom_batch_capacity =
         use_custom_distance
-            ? std::max<uint64_t>(1,
-                                 std::min<uint64_t>(inner_search_param.distance_batch_size,
-                                                    graph->MaximumDegree()))
+            ? std::max<uint64_t>(
+                  1, std::min<uint64_t>(inner_search_param.distance_batch_size, visit_capacity))
             : 0;
     Vector<int64_t> custom_labels(custom_batch_capacity, alloc);
     auto skip_strategy = create_filter_search_skip_strategy(
@@ -613,7 +618,13 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
         attr_ft = inner_search_param.executors[0]->Run();
     }
 
-    auto check_func = [&is_id_allowed, &attr_ft](InnerIdType id) {
+    uint64_t filter_checks = 0;
+    uint64_t pathseer_expansion_checks = 0;
+    uint64_t pathseer_expansion_matches = 0;
+    auto check_func = [&is_id_allowed, &attr_ft, &filter_checks](InnerIdType id) {
+        if (is_id_allowed != nullptr or attr_ft != nullptr) {
+            ++filter_checks;
+        }
         return (is_id_allowed == nullptr or is_id_allowed->CheckValid(id)) and
                (attr_ft == nullptr or attr_ft->CheckValid(id));
     };
@@ -771,10 +782,41 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
         count_no_visited = visit(graph,
                                  vl,
                                  current_node_pair,
-                                 inner_search_param.is_inner_id_allowed,
-                                 skip_strategy.get(),
+                                 pathseer_active ? nullptr : inner_search_param.is_inner_id_allowed,
+                                 pathseer_active ? nullptr : skip_strategy.get(),
                                  to_be_visited_id,
                                  neighbors);
+        const uint32_t sparse_count = count_no_visited;
+
+        if (pathseer_active) {
+            double virtual_overhead = 0.0;
+            if (this->mutex_array_ != nullptr) {
+                SharedLock lock(this->mutex_array_, current_node_pair.second);
+                graph->GetPathSeerExpansionNeighbors(current_node_pair.second,
+                                                      expansion_neighbors);
+            } else {
+                graph->GetPathSeerExpansionNeighbors(current_node_pair.second,
+                                                      expansion_neighbors);
+            }
+            for (const auto expansion_id : expansion_neighbors) {
+                if (vl->Get(expansion_id)) {
+                    continue;
+                }
+                ++pathseer_expansion_checks;
+                virtual_overhead += inner_search_param.pathseer_filter_cost_ratio;
+                if (check_func(expansion_id)) {
+                    virtual_overhead += 1.0;
+                    ++pathseer_expansion_matches;
+                    vl->Set(expansion_id);
+                    to_be_visited_id[count_no_visited++] = expansion_id;
+                }
+                if (inner_search_param.pathseer_vob > 0.0F and
+                    virtual_overhead + std::numeric_limits<float>::epsilon() >=
+                        inner_search_param.pathseer_vob) {
+                    break;
+                }
+            }
+        }
 
         bool collect_rabitq_lower_bound = false;
         if (use_custom_distance) {
@@ -804,6 +846,10 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
         for (uint32_t i = 0; i < count_no_visited; i++) {
             dist = line_dists[i];
             const auto cur_id = to_be_visited_id[i];
+            const bool pathseer_prefiltered = pathseer_active and i >= sparse_count;
+            auto is_allowed = [&](InnerIdType result_id) {
+                return (pathseer_prefiltered and result_id == cur_id) or check_func(result_id);
+            };
             if (reasoning != nullptr) {
                 reasoning->RecordVisit(cur_id, dist, hops);
             }
@@ -815,7 +861,7 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
                 candidate_set->Push(traversal_priority(dist), cur_id);
                 auto push_result = [&](InnerIdType result_id) {
                     if (not is_result_distance_eligible<mode>(dist, inner_search_param) or
-                        not check_func(result_id)) {
+                        not is_allowed(result_id)) {
                         return;
                     }
                     top_candidates->Push(dist, result_id);
@@ -843,7 +889,7 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
             }
             if constexpr (mode == KNN_SEARCH) {
                 if (collect_rabitq_lower_bound and lower_bound_dists[i] < lower_bound and
-                    check_func(cur_id)) {
+                    is_allowed(cur_id)) {
                     rabitq_lower_bound_candidates->emplace_back(lower_bound_dists[i], cur_id);
                 }
             }
@@ -851,7 +897,7 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
                 (mode == RANGE_SEARCH && dist <= inner_search_param.radius)) {
                 candidate_set->Push(-dist, cur_id);
                 //                flatten->Prefetch(candidate_set->Top().second);
-                if (check_func(cur_id)) {
+                if (is_allowed(cur_id)) {
                     top_candidates->Push(dist, cur_id);
                 } else if (reasoning != nullptr) {
                     reasoning->RecordFilterReject(cur_id);
@@ -930,6 +976,11 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
         auto& stats = *ctx->stats;
         stats.dist_cmp.fetch_add(dist_cmp, std::memory_order_relaxed);
         stats.hops.fetch_add(hops, std::memory_order_relaxed);
+        stats.filter_checks.fetch_add(filter_checks, std::memory_order_relaxed);
+        stats.pathseer_expansion_checks.fetch_add(pathseer_expansion_checks,
+                                                  std::memory_order_relaxed);
+        stats.pathseer_expansion_matches.fetch_add(pathseer_expansion_matches,
+                                                   std::memory_order_relaxed);
     }
 
     return top_candidates;

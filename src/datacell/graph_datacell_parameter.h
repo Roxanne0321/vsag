@@ -41,6 +41,8 @@ public:
 
     uint64_t init_max_capacity_{100};
 
+    uint64_t pathseer_total_degree_{0};
+
     bool support_remove_{false};
     uint32_t remove_flag_bit_{8};
 };

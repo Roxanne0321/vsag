@@ -19,6 +19,7 @@
 
 #include <cmath>
 
+#include "datacell/graph_datacell_parameter.h"
 #include "hgraph.h"
 #include "index_common_param.h"
 #include "inner_string_params.h"
@@ -238,6 +239,34 @@ TEST_CASE("HGraph maps support_duplicate to graph parameter", "[ut][HGraphParame
     REQUIRE(typed_param->deduplicate_storage);
     REQUIRE(typed_param->duplicate_distance_threshold == 0.25F);
     REQUIRE(typed_param->bottom_graph_param->support_duplicate_);
+}
+
+TEST_CASE("HGraph maps PathSeer fusion graph build parameters", "[ut][HGraphParameter][PathSeer]") {
+    vsag::IndexCommonParam common_param;
+    common_param.dim_ = 128;
+    common_param.data_type_ = vsag::DataTypes::DATA_TYPE_FLOAT;
+
+    auto external = vsag::JsonType::Parse(R"({
+        "graph_type": "odescent",
+        "graph_io_type": "memory_io",
+        "max_degree": 64,
+        "use_pathseer_fusion_graph": true,
+        "pathseer_m2": 128
+    })");
+    auto mapped = std::dynamic_pointer_cast<vsag::HGraphParameter>(
+        vsag::HGraph::CheckAndMappingExternalParam(external, common_param));
+    REQUIRE(mapped != nullptr);
+    REQUIRE(mapped->use_pathseer_fusion_graph);
+    REQUIRE(mapped->pathseer_m2 == 128);
+    auto graph_param =
+        std::dynamic_pointer_cast<vsag::GraphDataCellParameter>(mapped->bottom_graph_param);
+    REQUIRE(graph_param != nullptr);
+    REQUIRE(graph_param->max_degree_ == 64);
+    REQUIRE(graph_param->pathseer_total_degree_ == 128);
+    REQUIRE(mapped->ToJson()[vsag::HGRAPH_PATHSEER_M2].GetUint64() == 128);
+
+    external[vsag::HGRAPH_PATHSEER_M2].SetUint64(64);
+    REQUIRE_THROWS(vsag::HGraph::CheckAndMappingExternalParam(external, common_param));
 }
 
 TEST_CASE("HGraph maps conjugate graph parameters", "[ut][HGraphParameter]") {
@@ -714,6 +743,43 @@ TEST_CASE("HGraphSearchParameters parses skip_ratio and skip_strategy",
     SECTION("skip_strategy rejects non-string values") {
         REQUIRE_THROWS(vsag::HGraphSearchParameters::FromJson(
             R"({"hgraph": {"ef_search": 32, "skip_strategy": 123}})"));
+    }
+}
+
+TEST_CASE("HGraphSearchParameters parses PathSeer options",
+          "[ut][HGraphSearchParameters][pathseer]") {
+    SECTION("default values") {
+        const auto params =
+            vsag::HGraphSearchParameters::FromJson(R"({"hgraph": {"ef_search": 32}})");
+        REQUIRE_FALSE(params.use_pathseer);
+        REQUIRE(params.pathseer_expansion_limit == 64);
+        REQUIRE(params.pathseer_vob == 0.0F);
+        REQUIRE(params.pathseer_filter_cost_ratio == 0.1F);
+    }
+
+    SECTION("custom values") {
+        const auto params = vsag::HGraphSearchParameters::FromJson(R"({
+            "hgraph": {
+                "ef_search": 32,
+                "use_pathseer": true,
+                "pathseer_expansion_limit": 128,
+                "pathseer_vob": 12.5,
+                "pathseer_filter_cost_ratio": 0.25
+            }
+        })");
+        REQUIRE(params.use_pathseer);
+        REQUIRE(params.pathseer_expansion_limit == 128);
+        REQUIRE(params.pathseer_vob == 12.5F);
+        REQUIRE(params.pathseer_filter_cost_ratio == 0.25F);
+    }
+
+    SECTION("rejects invalid values") {
+        REQUIRE_THROWS(vsag::HGraphSearchParameters::FromJson(
+            R"({"hgraph": {"ef_search": 32, "pathseer_expansion_limit": 0}})"));
+        REQUIRE_THROWS(vsag::HGraphSearchParameters::FromJson(
+            R"({"hgraph": {"ef_search": 32, "pathseer_vob": -1.0}})"));
+        REQUIRE_THROWS(vsag::HGraphSearchParameters::FromJson(
+            R"({"hgraph": {"ef_search": 32, "pathseer_filter_cost_ratio": -0.1}})"));
     }
 }
 

@@ -67,6 +67,30 @@ public:
     virtual void
     GetNeighbors(InnerIdType id, Vector<InnerIdType>& neighbor_ids) const = 0;
 
+    virtual void
+    InsertPathSeerFusionNeighborsById(InnerIdType id,
+                                      const Vector<InnerIdType>& sparse_neighbor_ids,
+                                      const Vector<InnerIdType>& expansion_neighbor_ids) {
+        throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                            "graph does not support PathSeer fusion neighbors");
+    }
+
+    virtual void
+    GetPathSeerExpansionNeighbors(InnerIdType id,
+                                  Vector<InnerIdType>& neighbor_ids) const {
+        neighbor_ids.clear();
+    }
+
+    [[nodiscard]] virtual bool
+    HasPathSeerFusionGraph() const {
+        return false;
+    }
+
+    [[nodiscard]] virtual uint32_t
+    PathSeerTotalDegree() const {
+        return 0;
+    }
+
     [[nodiscard]] virtual bool
     CheckIdExists(InnerIdType id) const = 0;
 

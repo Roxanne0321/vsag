@@ -118,6 +118,11 @@ public:
     SaveGraph(GraphInterfacePtr& graph_storage);
 
     void
+    SavePathSeerFusionGraph(GraphInterfacePtr& graph_storage,
+                            int32_t sparse_degree,
+                            int32_t total_degree);
+
+    void
     SetMaxDegree(int32_t max_degree) {
         odescent_param_->max_degree = max_degree;
     }

@@ -108,6 +108,13 @@ HGraphParameter::FromJson(const JsonType& json) {
     this->bottom_graph_param =
         GraphInterfaceParameter::GetGraphParameterByJson(graph_storage_type, graph_json);
 
+    if (json.Contains(HGRAPH_USE_PATHSEER_FUSION_GRAPH)) {
+        this->use_pathseer_fusion_graph = json[HGRAPH_USE_PATHSEER_FUSION_GRAPH].GetBool();
+    }
+    if (json.Contains(HGRAPH_PATHSEER_M2)) {
+        this->pathseer_m2 = json[HGRAPH_PATHSEER_M2].GetUint64();
+    }
+
     hierarchical_graph_param = std::make_shared<SparseGraphDatacellParameter>();
     hierarchical_graph_param->max_degree_ = this->bottom_graph_param->max_degree_ / 2;
     if (graph_storage_type == GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT) {
@@ -143,6 +150,22 @@ HGraphParameter::FromJson(const JsonType& json) {
             odescent_param = std::make_shared<ODescentParameter>();
             odescent_param->FromJson(graph_json);
         }
+    }
+    if (this->use_pathseer_fusion_graph) {
+        CHECK_ARGUMENT(graph_storage_type == GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT,
+                       "PathSeer fusion graph requires flat graph storage");
+        CHECK_ARGUMENT(graph_type == GRAPH_TYPE_VALUE_ODESCENT,
+                       "PathSeer fusion graph requires ODescent batch build");
+        CHECK_ARGUMENT(this->pathseer_m2 > this->bottom_graph_param->max_degree_,
+                       "pathseer_m2 must be greater than graph max_degree (M1)");
+        auto graph_param =
+            std::dynamic_pointer_cast<GraphDataCellParameter>(this->bottom_graph_param);
+        CHECK_ARGUMENT(graph_param != nullptr,
+                       "PathSeer fusion graph requires GraphDataCell storage");
+        graph_param->pathseer_total_degree_ = this->pathseer_m2;
+    } else {
+        CHECK_ARGUMENT(this->pathseer_m2 == 0,
+                       "pathseer_m2 requires use_pathseer_fusion_graph=true");
     }
 
     if (json.Contains(SUPPORT_DUPLICATE)) {
@@ -286,9 +309,19 @@ HGraphParameter::ToJson() const {
     json[HGRAPH_USE_ELP_OPTIMIZER_KEY].SetBool(this->use_elp_optimizer);
     json[HGRAPH_IGNORE_REORDER_KEY].SetBool(this->ignore_reorder);
     json[HGRAPH_RABITQ_FUSED_DATACELL_KEY].SetBool(this->rabitq_fused_datacell);
+    json[HGRAPH_USE_PATHSEER_FUSION_GRAPH].SetBool(this->use_pathseer_fusion_graph);
+    if (this->use_pathseer_fusion_graph) {
+        json[HGRAPH_PATHSEER_M2].SetUint64(this->pathseer_m2);
+    }
     json[REORDER_SOURCE_KEY].SetString(this->reorder_source);
     json[BASE_CODES_KEY].SetJson(this->base_codes_param->ToJson());
-    json[GRAPH_KEY].SetJson(this->bottom_graph_param->ToJson());
+    auto graph_json = this->bottom_graph_param->ToJson();
+    graph_json[GRAPH_TYPE_KEY].SetString(this->graph_type);
+    if (this->odescent_param != nullptr) {
+        graph_json.UpdateJson(this->odescent_param->ToJson());
+        graph_json[GRAPH_PARAM_MAX_DEGREE_KEY].SetUint64(this->bottom_graph_param->max_degree_);
+    }
+    json[GRAPH_KEY].SetJson(graph_json);
     json[EF_CONSTRUCTION_KEY].SetUint64(this->ef_construction);
     json[RESIZE_INCREASE_COUNT_BIT].SetUint64(this->resize_increase_count_bit);
     json[ALPHA_KEY].SetFloat(this->alpha);
@@ -347,6 +380,8 @@ HGraphParameter::CheckCompatibility(const ParamPtr& other) const {
     CHECK_FIELD_EQ(*this, *p, duplicate_distance_threshold);
     CHECK_FIELD_EQ(*this, *p, support_force_remove);
     CHECK_FIELD_EQ(*this, *p, rabitq_fused_datacell);
+    CHECK_FIELD_EQ(*this, *p, use_pathseer_fusion_graph);
+    CHECK_FIELD_EQ(*this, *p, pathseer_m2);
     // A conjugate-enabled reader can load an older index without the optional graph and start
     // with an empty one. The reverse direction would discard serialized enhancement data.
     if (not this->use_conjugate_graph and p->use_conjugate_graph) {
@@ -453,6 +488,31 @@ HGraphSearchParameters::FromJson(const std::string& json_string) {
             fmt::format("parameters[{}] must be string type", HGRAPH_PARAMETER_SKIP_STRATEGY));
         obj.skip_strategy_type = parse_filter_search_skip_strategy_type(
             params[INDEX_TYPE_HGRAPH][HGRAPH_PARAMETER_SKIP_STRATEGY].GetString());
+    }
+    if (params[INDEX_TYPE_HGRAPH].Contains(HGRAPH_USE_PATHSEER)) {
+        obj.use_pathseer = params[INDEX_TYPE_HGRAPH][HGRAPH_USE_PATHSEER].GetBool();
+    }
+    if (params[INDEX_TYPE_HGRAPH].Contains(HGRAPH_PATHSEER_EXPANSION_LIMIT)) {
+        const auto& limit = params[INDEX_TYPE_HGRAPH][HGRAPH_PATHSEER_EXPANSION_LIMIT];
+        CHECK_ARGUMENT(limit.IsNumberInteger(), "pathseer_expansion_limit must be an integer");
+        const auto value = limit.IsNumberUnsigned()
+                               ? limit.GetUint64()
+                               : static_cast<uint64_t>(std::max<int64_t>(0, limit.GetInt()));
+        CHECK_ARGUMENT(value > 0 and value <= 1'000'000,
+                       "pathseer_expansion_limit must be in range [1, 1000000]");
+        obj.pathseer_expansion_limit = static_cast<uint32_t>(value);
+    }
+    if (params[INDEX_TYPE_HGRAPH].Contains(HGRAPH_PATHSEER_VOB)) {
+        obj.pathseer_vob = params[INDEX_TYPE_HGRAPH][HGRAPH_PATHSEER_VOB].GetFloat();
+        CHECK_ARGUMENT(std::isfinite(obj.pathseer_vob) and obj.pathseer_vob >= 0.0F,
+                       "pathseer_vob must be finite and non-negative");
+    }
+    if (params[INDEX_TYPE_HGRAPH].Contains(HGRAPH_PATHSEER_FILTER_COST_RATIO)) {
+        obj.pathseer_filter_cost_ratio =
+            params[INDEX_TYPE_HGRAPH][HGRAPH_PATHSEER_FILTER_COST_RATIO].GetFloat();
+        CHECK_ARGUMENT(std::isfinite(obj.pathseer_filter_cost_ratio) and
+                           obj.pathseer_filter_cost_ratio >= 0.0F,
+                       "pathseer_filter_cost_ratio must be finite and non-negative");
     }
 
     return obj;

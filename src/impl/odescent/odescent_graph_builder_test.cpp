@@ -24,6 +24,7 @@
 
 #include "datacell/flatten_datacell.h"
 #include "datacell/flatten_interface.h"
+#include "datacell/graph_datacell_parameter.h"
 #include "datacell/graph_interface.h"
 #include "impl/allocator/safe_allocator.h"
 #include "io/memory_io/memory_io.h"
@@ -181,6 +182,71 @@ TEST_CASE("ODescent Build Test", "[ut][ODescent]") {
     }
     REQUIRE(hit_edge_count / (num_vectors * indeed_max_degree) > 0.95);
     REQUIRE(hit_edge_count_merge >= hit_edge_count);
+}
+
+TEST_CASE("ODescent builds bounded PathSeer fusion zones", "[ut][ODescent][PathSeer]") {
+    constexpr int64_t count = 32;
+    constexpr int64_t dim = 8;
+    constexpr int32_t m1 = 4;
+    constexpr int32_t m2 = 8;
+    auto [ids, vectors] = fixtures::generate_ids_and_vectors(count, dim);
+
+    vsag::IndexCommonParam common;
+    common.dim_ = dim;
+    common.metric_ = vsag::MetricType::METRIC_TYPE_L2SQR;
+    common.data_type_ = vsag::DataTypes::DATA_TYPE_FLOAT;
+    common.allocator_ = vsag::SafeAllocator::FactoryDefaultAllocator();
+    auto threads = vsag::Engine::CreateThreadPool(4);
+    common.thread_pool_ = std::make_shared<vsag::SafeThreadPool>(threads->get(), false);
+
+    auto flatten_param = std::make_shared<vsag::FlattenDataCellParameter>();
+    flatten_param->quantizer_parameter = std::make_shared<vsag::FP32QuantizerParameter>();
+    flatten_param->io_parameter = std::make_shared<vsag::MemoryIOParameter>();
+    auto flatten = vsag::FlattenInterface::MakeInstance(flatten_param, common);
+    flatten->Train(vectors.data(), count);
+    flatten->BatchInsertVector(vectors.data(), count);
+
+    auto graph_param = std::make_shared<vsag::GraphDataCellParameter>();
+    graph_param->io_parameter_ = std::make_shared<vsag::MemoryIOParameter>();
+    graph_param->max_degree_ = m1;
+    graph_param->pathseer_total_degree_ = m2;
+    graph_param->init_max_capacity_ = count;
+    auto graph = vsag::GraphInterface::MakeInstance(graph_param, common);
+    graph->Resize(count);
+
+    auto build_param = std::make_shared<vsag::ODescentParameter>();
+    build_param->max_degree = m2;
+    build_param->turn = 5;
+    build_param->block_size = 8;
+    vsag::ODescent builder(
+        build_param, flatten, common.allocator_.get(), common.thread_pool_.get(), false);
+    REQUIRE(builder.Build());
+    builder.SavePathSeerFusionGraph(graph, m1, m2);
+
+    uint64_t expansion_count = 0;
+    for (vsag::InnerIdType id = 0; id < count; ++id) {
+        vsag::Vector<vsag::InnerIdType> sparse(common.allocator_.get());
+        vsag::Vector<vsag::InnerIdType> expansion(common.allocator_.get());
+        graph->GetNeighbors(id, sparse);
+        graph->GetPathSeerExpansionNeighbors(id, expansion);
+        REQUIRE(sparse.size() <= m1);
+        REQUIRE(sparse.size() + expansion.size() <= m2);
+        std::set<vsag::InnerIdType> unique;
+        for (const auto neighbor : sparse) {
+            REQUIRE(neighbor != id);
+            REQUIRE(unique.insert(neighbor).second);
+        }
+        float previous_distance = -1.0F;
+        for (const auto neighbor : expansion) {
+            REQUIRE(neighbor != id);
+            REQUIRE(unique.insert(neighbor).second);
+            const auto distance = flatten->ComputePairVectors(id, neighbor);
+            REQUIRE(distance >= previous_distance);
+            previous_distance = distance;
+        }
+        expansion_count += expansion.size();
+    }
+    REQUIRE(expansion_count > 0);
 }
 
 TEST_CASE("ODescent drains workers before propagating a build failure", "[ut][ODescent]") {

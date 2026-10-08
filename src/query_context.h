@@ -197,6 +197,11 @@ public:
         j["query_computer_count"].SetUint64(query_computer_count.load(std::memory_order_relaxed));
         j["parallel_search_fallback_count"].SetUint64(
             parallel_search_fallback_count.load(std::memory_order_relaxed));
+        j["filter_checks"].SetUint64(filter_checks.load(std::memory_order_relaxed));
+        j["pathseer_expansion_checks"].SetUint64(
+            pathseer_expansion_checks.load(std::memory_order_relaxed));
+        j["pathseer_expansion_matches"].SetUint64(
+            pathseer_expansion_matches.load(std::memory_order_relaxed));
         j["distance_evaluations"].SetUint64(distance_evaluations.load(std::memory_order_relaxed));
         for (uint64_t i = 0; i < distance_evaluations_by_phase.size(); ++i) {
             j["distance_evaluations_by_phase"]
@@ -233,6 +238,9 @@ public:
     std::atomic<uint32_t> rabitq_reorder_fallback_full_count{0};
     std::atomic<uint32_t> query_computer_count{0};
     std::atomic<uint32_t> parallel_search_fallback_count{0};
+    std::atomic<uint64_t> filter_checks{0};
+    std::atomic<uint64_t> pathseer_expansion_checks{0};
+    std::atomic<uint64_t> pathseer_expansion_matches{0};
     std::atomic<uint64_t> distance_evaluations{0};
     std::array<std::atomic<uint64_t>, static_cast<uint8_t>(DistanceEvaluationPhase::COUNT)>
         distance_evaluations_by_phase{};

@@ -441,6 +441,121 @@ ODescent::SaveGraph(GraphInterfacePtr& graph_storage) {
 }
 
 void
+ODescent::SavePathSeerFusionGraph(GraphInterfacePtr& graph_storage,
+                                  int32_t sparse_degree,
+                                  int32_t total_degree) {
+    if (not graph_storage->HasPathSeerFusionGraph() or sparse_degree <= 0 or
+        total_degree <= sparse_degree or graph_storage->MaximumDegree() != sparse_degree or
+        graph_storage->PathSeerTotalDegree() != static_cast<uint32_t>(total_degree)) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            "PathSeer fusion graph M1/M2 configuration mismatch");
+    }
+
+    // Preserve the M2-nearest candidate pool before RNG pruning. The candidates rejected by
+    // pruning, together with candidates beyond M1, form the expanding zone.
+    Vector<Vector<Node>> candidates(allocator_);
+    candidates.reserve(data_num_);
+    for (const auto& link : graph_) {
+        candidates.emplace_back(link.neighbors.begin(), link.neighbors.end(), allocator_);
+    }
+
+    const auto candidate_degree = odescent_param_->max_degree;
+    auto retain_sparse_candidates = [&, this](int64_t start, int64_t end) {
+        for (int64_t i = start; i < end; ++i) {
+            if (graph_[i].neighbors.size() > static_cast<uint64_t>(sparse_degree)) {
+                graph_[i].neighbors.resize(sparse_degree);
+            }
+        }
+    };
+    parallelize_task(retain_sparse_candidates);
+    odescent_param_->max_degree = sparse_degree;
+    prune_graph();
+    add_reverse_edges();
+
+    Vector<Vector<Node>> expansions(allocator_);
+    expansions.resize(data_num_, Vector<Node>(allocator_));
+    auto contains_id = [](const auto& row, uint32_t id) {
+        return std::any_of(row.begin(), row.end(), [id](const Node& node) { return node.id == id; });
+    };
+
+    auto initialize_expansions = [&, this](int64_t start, int64_t end) {
+        for (int64_t i = start; i < end; ++i) {
+            auto& expansion = expansions[i];
+            const auto capacity = std::max<int64_t>(
+                0, static_cast<int64_t>(total_degree) - graph_[i].neighbors.size());
+            expansion.reserve(capacity);
+            if (capacity == 0) {
+                continue;
+            }
+            for (const auto& candidate : candidates[i]) {
+                if (not contains_id(graph_[i].neighbors, candidate.id)) {
+                    expansion.push_back(candidate);
+                    if (expansion.size() == static_cast<uint64_t>(capacity)) {
+                        break;
+                    }
+                }
+            }
+        }
+    };
+    parallelize_task(initialize_expansions);
+
+    // Maintain reciprocal expansion edges. Each target row is distance ordered and evicts its
+    // farthest expansion edge when the sparse+expansion total would exceed M2.
+    auto add_reciprocal_expansions = [&, this](int64_t start, int64_t end) {
+        for (int64_t source = start; source < end; ++source) {
+            for (const auto& candidate : candidates[source]) {
+                if (contains_id(graph_[source].neighbors, candidate.id)) {
+                    continue;
+                }
+                const auto target = candidate.id;
+                if (target >= static_cast<uint32_t>(data_num_) or
+                    contains_id(graph_[target].neighbors, static_cast<uint32_t>(source))) {
+                    continue;
+                }
+                std::lock_guard<std::mutex> lock(points_lock_[target]);
+                auto& target_expansion = expansions[target];
+                if (contains_id(target_expansion, static_cast<uint32_t>(source))) {
+                    continue;
+                }
+                const auto capacity = std::max<int64_t>(
+                    0, static_cast<int64_t>(total_degree) - graph_[target].neighbors.size());
+                if (capacity == 0) {
+                    continue;
+                }
+                Node reverse(static_cast<uint32_t>(source), candidate.distance);
+                target_expansion.insert(
+                    std::lower_bound(target_expansion.begin(), target_expansion.end(), reverse),
+                    reverse);
+                if (target_expansion.size() > static_cast<uint64_t>(capacity)) {
+                    target_expansion.pop_back();
+                }
+            }
+        }
+    };
+    parallelize_task(add_reciprocal_expansions);
+
+    auto persist_fusion_graph = [&, this](int64_t start, int64_t end) {
+        for (int64_t i = start; i < end; ++i) {
+            const auto stored_id = valid_ids_ == nullptr ? static_cast<uint32_t>(i) : valid_ids_[i];
+            Vector<InnerIdType> sparse_ids(allocator_);
+            Vector<InnerIdType> expansion_ids(allocator_);
+            sparse_ids.reserve(graph_[i].neighbors.size());
+            expansion_ids.reserve(expansions[i].size());
+            for (const auto& node : graph_[i].neighbors) {
+                sparse_ids.push_back(valid_ids_ == nullptr ? node.id : valid_ids_[node.id]);
+            }
+            for (const auto& node : expansions[i]) {
+                expansion_ids.push_back(valid_ids_ == nullptr ? node.id : valid_ids_[node.id]);
+            }
+            graph_storage->InsertPathSeerFusionNeighborsById(
+                stored_id, sparse_ids, expansion_ids);
+        }
+    };
+    parallelize_task(persist_fusion_graph);
+    odescent_param_->max_degree = candidate_degree;
+}
+
+void
 ODescent::init_one_edge(int64_t i,
                         const GraphInterfacePtr& graph_storage,
                         const std::function<uint32_t(uint32_t)>& id_map_func,

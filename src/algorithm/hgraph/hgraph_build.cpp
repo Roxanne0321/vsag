@@ -280,11 +280,21 @@ HGraph::build_by_odescent(const DatasetPtr& data) {
         build_data = raw_vector_ != nullptr ? raw_vector_ : temporary_sq8_build_data;
     }
     {
-        odescent_param_->max_degree = bottom_graph_->MaximumDegree();
-        ODescent odescent_builder(
-            odescent_param_, build_data, allocator_, this->thread_pool_.get());
-        odescent_builder.Build();
-        odescent_builder.SaveGraph(bottom_graph_);
+        if (bottom_graph_->HasPathSeerFusionGraph()) {
+            odescent_param_->max_degree = bottom_graph_->PathSeerTotalDegree();
+            ODescent odescent_builder(
+                odescent_param_, build_data, allocator_, this->thread_pool_.get(), false);
+            odescent_builder.Build();
+            odescent_builder.SavePathSeerFusionGraph(bottom_graph_,
+                                                     bottom_graph_->MaximumDegree(),
+                                                     bottom_graph_->PathSeerTotalDegree());
+        } else {
+            odescent_param_->max_degree = bottom_graph_->MaximumDegree();
+            ODescent odescent_builder(
+                odescent_param_, build_data, allocator_, this->thread_pool_.get());
+            odescent_builder.Build();
+            odescent_builder.SaveGraph(bottom_graph_);
+        }
     }
     for (auto& route_graph_id : route_graph_ids) {
         odescent_param_->max_degree = bottom_graph_->MaximumDegree() / 2;
@@ -315,6 +325,10 @@ HGraph::Add(const DatasetPtr& data) {
 
 std::vector<int64_t>
 HGraph::add_impl(const DatasetPtr& data) {
+    if (this->bottom_graph_->HasPathSeerFusionGraph()) {
+        throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                            "experimental PathSeer fusion graph only supports batch Build");
+    }
     std::unique_lock<std::mutex> mci_add_lock(this->mci_add_mutex_, std::defer_lock);
     if (this->mci_parameters_.enabled) {
         mci_add_lock.lock();

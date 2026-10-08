@@ -33,6 +33,9 @@ GraphDataCellParameter::FromJson(const JsonType& json) {
     if (json.Contains(GRAPH_PARAM_INIT_MAX_CAPACITY_KEY)) {
         this->init_max_capacity_ = json[GRAPH_PARAM_INIT_MAX_CAPACITY_KEY].GetUint64();
     }
+    if (json.Contains(HGRAPH_PATHSEER_M2)) {
+        this->pathseer_total_degree_ = json[HGRAPH_PATHSEER_M2].GetUint64();
+    }
     if (json.Contains(GRAPH_SUPPORT_REMOVE)) {
         this->support_remove_ = json[GRAPH_SUPPORT_REMOVE].GetBool();
     }
@@ -53,6 +56,9 @@ GraphDataCellParameter::ToJson() const {
     json[IO_PARAMS_KEY].SetJson(this->io_parameter_->ToJson());
     json[GRAPH_PARAM_MAX_DEGREE_KEY].SetUint64(this->max_degree_);
     json[GRAPH_PARAM_INIT_MAX_CAPACITY_KEY].SetUint64(this->init_max_capacity_);
+    if (this->pathseer_total_degree_ > 0) {
+        json[HGRAPH_PATHSEER_M2].SetUint64(this->pathseer_total_degree_);
+    }
     json[GRAPH_SUPPORT_REMOVE].SetBool(this->support_remove_);
     json[REMOVE_FLAG_BIT].SetInt(this->remove_flag_bit_);
     json[HGRAPH_USE_REVERSE_EDGES_KEY].SetBool(this->use_reverse_edges_);
@@ -63,6 +69,7 @@ bool
 GraphDataCellParameter::CheckCompatibility(const ParamPtr& other) const {
     PARAM_CAST_OR_RETURN(GraphDataCellParameter, p, other);
     CHECK_FIELD_EQ(*this, *p, max_degree_);
+    CHECK_FIELD_EQ(*this, *p, pathseer_total_degree_);
     CHECK_FIELD_EQ(*this, *p, support_remove_);
     CHECK_FIELD_EQ(*this, *p, remove_flag_bit_);
     CHECK_FIELD_EQ(*this, *p, use_reverse_edges_);

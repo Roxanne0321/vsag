@@ -63,6 +63,25 @@ public:
     void
     GetNeighbors(InnerIdType id, Vector<InnerIdType>& neighbor_ids) const override;
 
+    void
+    InsertPathSeerFusionNeighborsById(InnerIdType id,
+                                      const Vector<InnerIdType>& sparse_neighbor_ids,
+                                      const Vector<InnerIdType>& expansion_neighbor_ids) override;
+
+    void
+    GetPathSeerExpansionNeighbors(InnerIdType id,
+                                  Vector<InnerIdType>& neighbor_ids) const override;
+
+    [[nodiscard]] bool
+    HasPathSeerFusionGraph() const override {
+        return pathseer_total_degree_ > 0;
+    }
+
+    [[nodiscard]] uint32_t
+    PathSeerTotalDegree() const override {
+        return pathseer_total_degree_;
+    }
+
     [[nodiscard]] bool
     CheckIdExists(InnerIdType id) const override {
         return id < this->total_count_ && id < this->max_capacity_;
@@ -138,6 +157,9 @@ public:
             if (is_support_delete_) {
                 StreamReader::ReadVector(reader, node_versions_);
             }
+            if (pathseer_total_degree_ > 0) {
+                StreamReader::ReadVector(reader, pathseer_sparse_degrees_);
+            }
         } else {
             GraphInterface::DeserializeTail(reader);
         }
@@ -157,6 +179,7 @@ public:
     uint64_t
     GetMemoryUsage() const override {
         uint64_t memory = sizeof(GraphDataCell) + node_versions_.size() * sizeof(uint8_t);
+        memory += pathseer_sparse_degrees_.size() * sizeof(uint32_t);
         memory += layout_.GetMemoryUsage();
         if (reverse_edges_) {
             memory += reverse_edges_->GetMemoryUsage();
@@ -187,6 +210,9 @@ public:
         if (is_support_delete_) {
             node_versions_.resize(capacity);
         }
+        if (pathseer_total_degree_ > 0) {
+            pathseer_sparse_degrees_.resize(capacity);
+        }
         this->max_capacity_ = capacity;
     }
 
@@ -197,6 +223,10 @@ protected:
     FixedLayout<IOTmpl> layout_{};
 
     Vector<uint8_t> node_versions_;
+
+    Vector<uint32_t> pathseer_sparse_degrees_;
+
+    uint32_t pathseer_total_degree_{0};
 
     bool is_support_delete_{true};
     uint32_t remove_flag_bit_{8};
@@ -238,19 +268,26 @@ GraphDataCell<IOTmpl>::MergeOther(GraphInterfacePtr other, uint64_t bias) {
 template <typename IOTmpl>
 GraphDataCell<IOTmpl>::GraphDataCell(const GraphDataCellParamPtr& param,
                                      const IndexCommonParam& common_param)
-    : node_versions_(common_param.allocator_.get()) {
+    : node_versions_(common_param.allocator_.get()),
+      pathseer_sparse_degrees_(common_param.allocator_.get()) {
     this->maximum_degree_ = param->max_degree_;
     this->max_capacity_ = param->init_max_capacity_;
     this->is_support_delete_ = param->support_remove_;
     this->remove_flag_bit_ = param->remove_flag_bit_;
     this->id_bit_ = sizeof(InnerIdType) * 8 - this->remove_flag_bit_;
     this->remove_flag_mask_ = (1 << this->id_bit_) - 1;
-    this->code_line_size_ = this->maximum_degree_ * sizeof(InnerIdType) + sizeof(uint32_t);
+    this->pathseer_total_degree_ = static_cast<uint32_t>(param->pathseer_total_degree_);
+    const auto physical_degree =
+        pathseer_total_degree_ > 0 ? pathseer_total_degree_ : this->maximum_degree_;
+    this->code_line_size_ = physical_degree * sizeof(InnerIdType) + sizeof(uint32_t);
     this->layout_.SetCodeSize(this->code_line_size_);
     this->layout_.SetIO(std::make_shared<IOTmpl>(param->io_parameter_, common_param));
     this->allocator_ = common_param.allocator_.get();
     if (this->is_support_delete_) {
         node_versions_.resize(max_capacity_);
+    }
+    if (pathseer_total_degree_ > 0) {
+        pathseer_sparse_degrees_.resize(max_capacity_);
     }
     if (param->use_reverse_edges_) {
         reverse_edges_ = std::make_unique<ReverseEdge>(this->allocator_);
@@ -287,6 +324,9 @@ GraphDataCell<IOTmpl>::InsertNeighborsById(InnerIdType id,
     InnerIdType current = total_count_.load();
     while (current < id + 1 && !total_count_.compare_exchange_weak(current, id + 1)) {
     }
+    if (pathseer_total_degree_ > 0) {
+        pathseer_sparse_degrees_[id] = static_cast<uint32_t>(neighbor_ids.size());
+    }
     if (is_support_delete_) {
         uint32_t neighbor_count = std::min((uint32_t)(neighbor_ids.size()), this->maximum_degree_);
         this->layout_.WriteAt(id,
@@ -316,8 +356,52 @@ GraphDataCell<IOTmpl>::InsertNeighborsById(InnerIdType id,
 }
 
 template <typename IOTmpl>
+void
+GraphDataCell<IOTmpl>::InsertPathSeerFusionNeighborsById(
+    InnerIdType id,
+    const Vector<InnerIdType>& sparse_neighbor_ids,
+    const Vector<InnerIdType>& expansion_neighbor_ids) {
+    if (pathseer_total_degree_ == 0) {
+        throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                            "PathSeer fusion graph is not enabled");
+    }
+    if (sparse_neighbor_ids.size() > this->maximum_degree_ or
+        sparse_neighbor_ids.size() + expansion_neighbor_ids.size() > pathseer_total_degree_) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            "PathSeer fusion neighbor count exceeds M1/M2");
+    }
+
+    Vector<InnerIdType> neighbors(allocator_);
+    neighbors.reserve(sparse_neighbor_ids.size() + expansion_neighbor_ids.size());
+    neighbors.insert(neighbors.end(), sparse_neighbor_ids.begin(), sparse_neighbor_ids.end());
+    neighbors.insert(neighbors.end(), expansion_neighbor_ids.begin(), expansion_neighbor_ids.end());
+
+    InnerIdType current = total_count_.load();
+    while (current < id + 1 and not total_count_.compare_exchange_weak(current, id + 1)) {
+    }
+    const auto total_degree = static_cast<uint32_t>(neighbors.size());
+    this->layout_.WriteAt(id,
+                          COUNT_OFFSET,
+                          reinterpret_cast<const uint8_t*>(&total_degree),
+                          sizeof(total_degree));
+    if (is_support_delete_) {
+        for (auto& neighbor_id : neighbors) {
+            neighbor_id |= (node_versions_[neighbor_id] << id_bit_);
+        }
+    }
+    this->layout_.WriteAt(id,
+                          NEIGHBORS_OFFSET,
+                          reinterpret_cast<const uint8_t*>(neighbors.data()),
+                          static_cast<uint64_t>(neighbors.size()) * sizeof(InnerIdType));
+    pathseer_sparse_degrees_[id] = static_cast<uint32_t>(sparse_neighbor_ids.size());
+}
+
+template <typename IOTmpl>
 uint32_t
 GraphDataCell<IOTmpl>::GetNeighborSize(InnerIdType id) const {
+    if (pathseer_total_degree_ > 0) {
+        return pathseer_sparse_degrees_[id];
+    }
     uint32_t neighbor_count = 0;
     this->layout_.ReadAt(
         id, COUNT_OFFSET, sizeof(neighbor_count), reinterpret_cast<uint8_t*>(&neighbor_count));
@@ -330,9 +414,14 @@ GraphDataCell<IOTmpl>::GetNeighbors(InnerIdType id, Vector<InnerIdType>& neighbo
     uint32_t neighbor_count = 0;
     this->layout_.ReadAt(
         id, COUNT_OFFSET, sizeof(neighbor_count), reinterpret_cast<uint8_t*>(&neighbor_count));
-    if (neighbor_count > this->maximum_degree_) {
+    const auto stored_limit =
+        pathseer_total_degree_ > 0 ? pathseer_total_degree_ : this->maximum_degree_;
+    if (neighbor_count > stored_limit) {
         neighbor_ids.clear();
         return;
+    }
+    if (pathseer_total_degree_ > 0) {
+        neighbor_count = pathseer_sparse_degrees_[id];
     }
     if (is_support_delete_) {
         neighbor_count &= remove_flag_mask_;
@@ -361,6 +450,42 @@ GraphDataCell<IOTmpl>::GetNeighbors(InnerIdType id, Vector<InnerIdType>& neighbo
 
 template <typename IOTmpl>
 void
+GraphDataCell<IOTmpl>::GetPathSeerExpansionNeighbors(
+    InnerIdType id, Vector<InnerIdType>& neighbor_ids) const {
+    neighbor_ids.clear();
+    if (pathseer_total_degree_ == 0) {
+        return;
+    }
+    uint32_t total_degree = 0;
+    this->layout_.ReadAt(
+        id, COUNT_OFFSET, sizeof(total_degree), reinterpret_cast<uint8_t*>(&total_degree));
+    const auto sparse_degree = pathseer_sparse_degrees_[id];
+    if (total_degree > pathseer_total_degree_ or sparse_degree > total_degree) {
+        return;
+    }
+    const auto expansion_degree = total_degree - sparse_degree;
+    Vector<InnerIdType> stored(expansion_degree, this->allocator_);
+    this->layout_.ReadAt(
+        id,
+        NEIGHBORS_OFFSET + static_cast<uint64_t>(sparse_degree) * sizeof(InnerIdType),
+        static_cast<uint64_t>(expansion_degree) * sizeof(InnerIdType),
+        reinterpret_cast<uint8_t*>(stored.data()));
+    if (is_support_delete_) {
+        neighbor_ids.reserve(expansion_degree);
+        for (const auto value : stored) {
+            const auto version = value >> id_bit_;
+            const auto neighbor_id = value & remove_flag_mask_;
+            if (node_versions_[neighbor_id] == version) {
+                neighbor_ids.push_back(neighbor_id);
+            }
+        }
+    } else {
+        neighbor_ids.swap(stored);
+    }
+}
+
+template <typename IOTmpl>
+void
 GraphDataCell<IOTmpl>::Resize(InnerIdType new_size) {
     if (new_size < this->max_capacity_) {
         return;
@@ -374,6 +499,9 @@ GraphDataCell<IOTmpl>::Resize(InnerIdType new_size) {
         node_versions_.resize(new_size);
     }
     this->layout_.Resize(new_size);
+    if (pathseer_total_degree_ > 0) {
+        pathseer_sparse_degrees_.resize(new_size);
+    }
     this->max_capacity_ = new_size;
     if (this->duplicate_tracker_ != nullptr) {
         this->duplicate_tracker_->Resize(new_size);
@@ -389,6 +517,9 @@ GraphDataCell<IOTmpl>::Serialize(StreamWriter& writer) {
     if (is_support_delete_) {
         StreamWriter::WriteVector(writer, node_versions_);
     }
+    if (pathseer_total_degree_ > 0) {
+        StreamWriter::WriteVector(writer, pathseer_sparse_degrees_);
+    }
 }
 
 template <typename IOTmpl>
@@ -400,6 +531,9 @@ GraphDataCell<IOTmpl>::Deserialize(StreamReader& reader) {
     this->layout_.SetCodeSize(this->code_line_size_);
     if (is_support_delete_) {
         StreamReader::ReadVector(reader, node_versions_);
+    }
+    if (pathseer_total_degree_ > 0) {
+        StreamReader::ReadVector(reader, pathseer_sparse_degrees_);
     }
 }
 

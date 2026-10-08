@@ -347,7 +347,10 @@ HGraph::search_one_graph(const void* query,
             rabitq_candidates->fused_search_used = true;
         }
     }
-    const bool parallel_search_requested = inner_search_param.parallel_search_thread_count > 1;
+    // The experimental PathSeer traversal is implemented by BasicSearcher. Keep it on that
+    // path even when callers request parallel graph expansion.
+    const bool parallel_search_requested =
+        inner_search_param.parallel_search_thread_count > 1 and not inner_search_param.use_pathseer;
     const bool has_parallel_search_executor =
         this->thread_pool_ != nullptr and this->parallel_searcher_ != nullptr;
     if (result == nullptr and parallel_search_requested and has_parallel_search_executor) {
@@ -880,6 +883,10 @@ HGraph::SearchWithRequest(const SearchRequest& request) const {
         use_custom_distance ? false : params.rabitq_one_bit_search;
     base_search_param.skip_ratio = params.skip_ratio;
     base_search_param.skip_strategy_type = params.skip_strategy_type;
+    base_search_param.use_pathseer = params.use_pathseer;
+    base_search_param.pathseer_expansion_limit = params.pathseer_expansion_limit;
+    base_search_param.pathseer_vob = params.pathseer_vob;
+    base_search_param.pathseer_filter_cost_ratio = params.pathseer_filter_cost_ratio;
     base_search_param.distance_batch_func = request.distance_batch_func_;
     base_search_param.distance_batch_size = request.distance_batch_size_;
     if (params.enable_time_record) {

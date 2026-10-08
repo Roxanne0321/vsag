@@ -74,6 +74,8 @@ public:
     bool ignore_reorder{false};
     bool build_by_base{false};
     bool rabitq_fused_datacell{false};
+    bool use_pathseer_fusion_graph{false};
+    uint64_t pathseer_m2{0};
 
     uint64_t ef_construction{400};
     uint64_t resize_increase_count_bit{DEFAULT_RESIZE_INCREASE_COUNT_BIT};
@@ -118,6 +120,10 @@ public:
     float skip_ratio{0.2F};
     FilterSearchSkipStrategyType skip_strategy_type{
         FilterSearchSkipStrategyType::DETERMINISTIC_ACCUMULATIVE};
+    bool use_pathseer{false};
+    uint32_t pathseer_expansion_limit{64};
+    float pathseer_vob{0.0F};
+    float pathseer_filter_cost_ratio{0.1F};
 
 private:
     HGraphSearchParameters() = default;
