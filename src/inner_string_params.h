@@ -214,6 +214,7 @@ const char* const IVF_SEARCH_PARAM_DISABLE_BUCKET_SCAN = "disable_bucket_scan";
 const char* const SEARCH_PARAM_FACTOR = "factor";
 const char* const SEARCH_PARAM_ENABLE_REORDER = "enable_reorder";
 const char* const SEARCH_PARALLELISM = "parallelism";
+const char* const SPARSE_PARALLEL_WINDOW_BATCH_SIZE = "parallel_window_batch_size";
 const char* const SEARCH_MAX_TIME_COST_MS = "timeout_ms";
 const char* const SPARSE_N_CANDIDATE = "n_candidate";
 

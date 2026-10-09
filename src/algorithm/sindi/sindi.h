@@ -15,8 +15,11 @@
 
 #pragma once
 
+#include <algorithm>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "algorithm/inner_index_interface.h"
 #include "algorithm/sindi/term_id_mapper.h"
@@ -29,6 +32,69 @@
 namespace vsag {
 
 class ReasoningContext;
+
+/**
+ * @brief Pool of window distance scratch buffers for the batched parallel window search.
+ *
+ * A window distance array is pure scratch space: heap insertion zeroes every candidate it
+ * consumes, so a fully consumed buffer is clean and can be reused as-is. Pooling it per
+ * index keeps the buffers warm (no per-query mmap / first-touch faults) and bounded.
+ */
+class SindiWindowDistsPool {
+public:
+    static constexpr uint64_t MAX_POOLED_BYTES = 64ULL * 1024 * 1024;
+
+    explicit SindiWindowDistsPool(Allocator* allocator) : allocator_(allocator) {
+    }
+
+    Vector<float>
+    Acquire(uint32_t window_size) {
+        std::scoped_lock lock(mutex_);
+        if (free_.empty()) {
+            return Vector<float>(window_size, 0.0F, allocator_);
+        }
+        auto buffer = std::move(free_.back());
+        free_.pop_back();
+        pooled_bytes_ -= static_cast<uint64_t>(buffer.size()) * sizeof(float);
+        if (buffer.size() != window_size) {
+            buffer.assign(window_size, 0.0F);
+        }
+        return buffer;
+    }
+
+    /**
+     * @param clean false when the search stopped early, so the buffer may still hold
+     *              unconsumed (non-zero) distances and has to be zeroed before reuse.
+     */
+    void
+    Release(Vector<float>&& buffer, bool clean) {
+        if (buffer.empty()) {
+            return;
+        }
+        if (not clean) {
+            std::fill(buffer.begin(), buffer.end(), 0.0F);
+        }
+        const auto bytes = static_cast<uint64_t>(buffer.size()) * sizeof(float);
+        std::scoped_lock lock(mutex_);
+        if (pooled_bytes_ + bytes > MAX_POOLED_BYTES) {
+            return;
+        }
+        pooled_bytes_ += bytes;
+        free_.emplace_back(std::move(buffer));
+    }
+
+    [[nodiscard]] uint64_t
+    GetMemoryUsage() const {
+        std::scoped_lock lock(mutex_);
+        return pooled_bytes_;
+    }
+
+private:
+    Allocator* allocator_{nullptr};
+    mutable std::mutex mutex_;
+    std::vector<Vector<float>> free_;
+    uint64_t pooled_bytes_{0};
+};
 
 /**
  * @brief SINDI: Sparse INverted Index with windowed term lists.
@@ -194,7 +260,22 @@ private:
                 ReasoningContext* reasoning_ctx = nullptr,
                 SearchStatistics* statistics = nullptr,
                 const uint64_t* filter_callback_remaining = nullptr,
-                const SindiMetadataSearchRoute& metadata_route = {}) const;
+                const SindiMetadataSearchRoute& metadata_route = {},
+                int64_t parallelism = 1,
+                int64_t parallel_window_batch_size = 0) const;
+
+    bool
+    parallel_knn_window_search(const SparseTermComputerPtr& computer,
+                               const InnerSearchParam& inner_param,
+                               Allocator* search_allocator,
+                               bool use_term_lists_heap_insert,
+                               ReasoningContext* reasoning_ctx,
+                               SearchStatistics* statistics,
+                               const uint64_t* filter_callback_remaining,
+                               const SindiMetadataSearchRoute& metadata_route,
+                               int64_t parallelism,
+                               int64_t parallel_window_batch_size,
+                               MaxHeap& heap) const;
 
     bool
     UseTermListsHeapInsert(const SINDISearchParameter& search_param,
@@ -322,6 +403,9 @@ private:
     bool immutable_enabled_{false};
     bool immutable_build_started_{false};
     ImmutableSindiTermDataCellPtr immutable_term_datacell_{nullptr};
+
+    // Reused window distance scratch buffers for the batched parallel window search.
+    mutable SindiWindowDistsPool dists_pool_;
 };
 
 }  // namespace vsag

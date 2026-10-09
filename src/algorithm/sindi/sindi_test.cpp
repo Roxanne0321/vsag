@@ -17,15 +17,22 @@
 #include "sindi.h"
 
 #include <array>
+#include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
+#include <future>
 #include <map>
+#include <mutex>
 #include <set>
 #include <sstream>
+#include <thread>
 #include <tuple>
 
 #include "algorithm/sparse_distance.h"
 #include "impl/allocator/safe_allocator.h"
+#include "impl/thread_pool/default_thread_pool.h"
+#include "impl/thread_pool/safe_thread_pool.h"
 #include "index_common_param.h"
 #include "storage/serialization_tags.h"
 #include "storage/serialization_template_test.h"
@@ -214,6 +221,403 @@ private:
     bool accept_all_{false};
     mutable uint64_t count_{0};
 };
+
+class ReorderingThreadPool : public ThreadPool {
+public:
+    ~ReorderingThreadPool() override {
+        this->WaitUntilEmpty();
+    }
+
+    std::future<void>
+    Enqueue(std::function<void(void)> task) override {
+        const auto sequence = submitted_.fetch_add(1, std::memory_order_relaxed);
+        auto promise = std::make_shared<std::promise<void>>();
+        auto future = promise->get_future();
+        active_.fetch_add(1, std::memory_order_relaxed);
+        std::thread([this, sequence, task = std::move(task), promise = std::move(promise)]() {
+            try {
+                if (sequence == 0) {
+                    std::unique_lock lock(mutex_);
+                    condition_.wait(lock, [this]() { return second_completed_; });
+                }
+                task();
+                if (sequence == 1) {
+                    {
+                        std::scoped_lock lock(mutex_);
+                        second_completed_ = true;
+                        reordered_.store(true, std::memory_order_relaxed);
+                    }
+                    condition_.notify_all();
+                }
+                promise->set_value();
+            } catch (...) {
+                promise->set_exception(std::current_exception());
+            }
+            active_.fetch_sub(1, std::memory_order_relaxed);
+            condition_.notify_all();
+        }).detach();
+        return future;
+    }
+
+    void
+    WaitUntilEmpty() override {
+        std::unique_lock lock(mutex_);
+        condition_.wait(lock, [this]() { return active_.load(std::memory_order_relaxed) == 0; });
+    }
+
+    void
+    SetQueueSizeLimit(uint64_t) override {
+    }
+
+    void
+    SetPoolSize(uint64_t) override {
+    }
+
+    [[nodiscard]] uint64_t
+    SubmissionCount() const {
+        return submitted_.load(std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] bool
+    Reordered() const {
+        return reordered_.load(std::memory_order_relaxed);
+    }
+
+private:
+    std::atomic<uint64_t> submitted_{0};
+    std::atomic<uint64_t> active_{0};
+    std::atomic_bool reordered_{false};
+    std::mutex mutex_;
+    std::condition_variable condition_;
+    bool second_completed_{false};
+};
+
+class ThrowingThreadPool : public ThreadPool {
+public:
+    std::future<void>
+    Enqueue(std::function<void(void)> task) override {
+        if (submitted_.fetch_add(1, std::memory_order_relaxed) == 1) {
+            throw std::runtime_error("injected SINDI enqueue failure");
+        }
+        return pool_.Enqueue(std::move(task));
+    }
+
+    void
+    WaitUntilEmpty() override {
+        pool_.WaitUntilEmpty();
+    }
+
+    void
+    SetQueueSizeLimit(uint64_t limit) override {
+        pool_.SetQueueSizeLimit(limit);
+    }
+
+    void
+    SetPoolSize(uint64_t limit) override {
+        pool_.SetPoolSize(limit);
+    }
+
+private:
+    DefaultThreadPool pool_{2};
+    std::atomic<uint64_t> submitted_{0};
+};
+
+// window_compute_cycles / window_heap_cycles are wall-clock counters of the search
+// itself, so parallel and serial runs legitimately differ; every other statistic must
+// match exactly. A non-zero compute counter is still required, to make sure the
+// instrumentation actually ran on both paths.
+void
+RequireSameSindiResult(const DatasetPtr& expected, const DatasetPtr& actual) {
+    REQUIRE(actual->GetDim() == expected->GetDim());
+    for (int64_t i = 0; i < expected->GetDim(); ++i) {
+        REQUIRE(actual->GetIds()[i] == expected->GetIds()[i]);
+        REQUIRE(actual->GetDistances()[i] == expected->GetDistances()[i]);
+    }
+    auto expected_json = JsonType::Parse(expected->GetStatistics());
+    auto actual_json = JsonType::Parse(actual->GetStatistics());
+    REQUIRE(expected_json.Contains("window_compute_cycles"));
+    REQUIRE(actual_json.Contains("window_compute_cycles"));
+    REQUIRE(expected_json["window_compute_cycles"].GetUint64() > 0);
+    REQUIRE(actual_json["window_compute_cycles"].GetUint64() > 0);
+    expected_json.Erase("window_compute_cycles");
+    expected_json.Erase("window_heap_cycles");
+    actual_json.Erase("window_compute_cycles");
+    actual_json.Erase("window_heap_cycles");
+    REQUIRE(actual_json.Dump() == expected_json.Dump());
+}
+
+TEST_CASE("SINDI KNN parallel windows preserve serial semantics", "[ut][SINDI]") {
+    const bool immutable = GENERATE(false, true);
+    const bool use_reorder = GENERATE(false, true);
+    const float query_prune_ratio = GENERATE(0.0F, 0.2F);
+    const bool use_metadata_route = GENERATE(false, true);
+    CAPTURE(immutable, use_reorder, query_prune_ratio, use_metadata_route);
+
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+    auto reordered_pool = std::make_shared<ReorderingThreadPool>();
+    IndexCommonParam common_param;
+    common_param.allocator_ = allocator;
+    common_param.metric_ = MetricType::METRIC_TYPE_IP;
+    common_param.dim_ = 8;
+    common_param.thread_pool_ = std::make_shared<SafeThreadPool>(reordered_pool);
+
+    auto parameter = std::make_shared<SINDIParameter>();
+    parameter->term_id_limit = 8;
+    parameter->window_size = 4;
+    parameter->doc_prune_ratio = 0.0F;
+    parameter->avg_doc_term_length = 2;
+    parameter->use_reorder = use_reorder;
+    parameter->immutable = immutable;
+
+    constexpr uint64_t count = 12;
+    std::vector<int64_t> labels(count);
+    std::vector<std::array<uint32_t, 2>> term_ids(count);
+    std::vector<std::array<float, 2>> term_values(count);
+    std::vector<SparseVector> vectors(count);
+    std::vector<std::string> hosts(count, "host-a");
+    for (uint64_t i = 0; i < count; ++i) {
+        labels[i] = 100 + static_cast<int64_t>(i);
+        term_ids[i] = {1, 2 + static_cast<uint32_t>(i % 3)};
+        term_values[i] = {0.5F + static_cast<float>(i) * 0.1F, 0.2F};
+        vectors[i] = SparseVector{2, term_ids[i].data(), term_values[i].data()};
+    }
+    auto base = Dataset::Make();
+    base->NumElements(count)->SparseVectors(vectors.data())->Ids(labels.data())->Owner(false);
+    if (use_metadata_route) {
+        base->StringMetadata(SINDI_HOST_METADATA_NAME, hosts.data());
+    }
+
+    SINDI index(parameter, common_param);
+    REQUIRE(index.Build(base).empty());
+
+    std::array<uint32_t, 2> query_ids{1, 2};
+    std::array<float, 2> query_values{1.0F, 0.5F};
+    SparseVector query_vector{2, query_ids.data(), query_values.data()};
+    auto query = Dataset::Make();
+    query->NumElements(1)->SparseVectors(&query_vector)->Owner(false);
+    std::string query_host = "host-a";
+    if (use_metadata_route) {
+        query->StringMetadata(SINDI_HOST_METADATA_NAME, &query_host);
+    }
+
+    // This case pins the fine-grained (one window per task) pipeline so the reordering and
+    // filter-limit assertions stay meaningful; batching is covered by the next test case.
+    const auto params = [query_prune_ratio](int64_t parallelism) {
+        return fmt::format(
+            R"({{"sindi":{{"n_candidate":8,"query_prune_ratio":{},"term_prune_ratio":0.0,"parallelism":{},"parallel_window_batch_size":1}}}})",
+            query_prune_ratio,
+            parallelism);
+    };
+    const auto serial = index.KnnSearch(query, 4, params(1), nullptr);
+    REQUIRE(reordered_pool->SubmissionCount() == 0);
+
+    const auto parallel = index.KnnSearch(query, 4, params(2), nullptr);
+    RequireSameSindiResult(serial, parallel);
+    REQUIRE(reordered_pool->Reordered());
+
+    const auto excessive = index.KnnSearch(query, 4, params(64), nullptr);
+    RequireSameSindiResult(serial, excessive);
+
+    SearchRequest serial_request;
+    serial_request.query_ = query;
+    serial_request.mode_ = SearchMode::KNN_SEARCH;
+    serial_request.topk_ = 4;
+    serial_request.params_str_ = params(1);
+    serial_request.expected_labels_ = {labels.back()};
+    const auto serial_request_result = index.SearchWithRequest(serial_request);
+
+    auto parallel_request = serial_request;
+    parallel_request.params_str_ = params(2);
+    const auto parallel_request_result = index.SearchWithRequest(parallel_request);
+    RequireSameSindiResult(serial_request_result, parallel_request_result);
+    REQUIRE(parallel_request_result->GetReasoning() == serial_request_result->GetReasoning());
+
+    const auto before_range = reordered_pool->SubmissionCount();
+    const auto serial_range = index.RangeSearch(query, 0.6F, params(1), nullptr, 4);
+    const auto parallel_range = index.RangeSearch(query, 0.6F, params(8), nullptr, 4);
+    RequireSameSindiResult(serial_range, parallel_range);
+    REQUIRE(reordered_pool->SubmissionCount() == before_range);
+
+    const auto limited_params = fmt::format(
+        R"({{"sindi":{{"n_candidate":8,"query_prune_ratio":{},"term_prune_ratio":0.0,"filter_callback_limit":5,"parallelism":{},"parallel_window_batch_size":1}}}})",
+        query_prune_ratio,
+        1);
+    auto serial_filter = std::make_shared<CountingFilter>(104);
+    const auto serial_filtered = index.KnnSearch(query, 4, limited_params, serial_filter);
+    const auto parallel_limited_params = fmt::format(
+        R"({{"sindi":{{"n_candidate":8,"query_prune_ratio":{},"term_prune_ratio":0.0,"filter_callback_limit":5,"parallelism":{},"parallel_window_batch_size":1}}}})",
+        query_prune_ratio,
+        2);
+    auto parallel_filter = std::make_shared<CountingFilter>(104);
+    const auto parallel_filtered =
+        index.KnnSearch(query, 4, parallel_limited_params, parallel_filter);
+    RequireSameSindiResult(serial_filtered, parallel_filtered);
+    REQUIRE(parallel_filter->Count() == serial_filter->Count());
+}
+
+TEST_CASE("SINDI parallel window batches preserve serial semantics", "[ut][SINDI]") {
+    const bool immutable = GENERATE(false, true);
+    const bool use_reorder = GENERATE(false, true);
+    const int64_t batch_size = GENERATE(1, 2, 3, 8, 64);
+    const int64_t parallelism = GENERATE(2, 4);
+    CAPTURE(immutable, use_reorder, batch_size, parallelism);
+
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+    IndexCommonParam common_param;
+    common_param.allocator_ = allocator;
+    common_param.metric_ = MetricType::METRIC_TYPE_IP;
+    common_param.dim_ = 8;
+    common_param.thread_pool_ =
+        std::make_shared<SafeThreadPool>(std::make_shared<DefaultThreadPool>(4));
+
+    auto parameter = std::make_shared<SINDIParameter>();
+    parameter->term_id_limit = 8;
+    parameter->window_size = 4;
+    parameter->doc_prune_ratio = 0.0F;
+    parameter->avg_doc_term_length = 2;
+    parameter->use_reorder = use_reorder;
+    parameter->immutable = immutable;
+
+    // 40 documents over 10 windows, and every document scores exactly the same, so the
+    // returned id sequence is decided purely by the heap operation order. Any batch pipeline
+    // that does not replay the serial window order breaks this comparison.
+    constexpr uint64_t count = 40;
+    constexpr int64_t k = 8;
+    std::vector<int64_t> labels(count);
+    std::vector<std::array<uint32_t, 2>> term_ids(count);
+    std::vector<std::array<float, 2>> term_values(count);
+    std::vector<SparseVector> vectors(count);
+    for (uint64_t i = 0; i < count; ++i) {
+        labels[i] = 1000 + static_cast<int64_t>(i);
+        term_ids[i] = {1, 2 + static_cast<uint32_t>(i % 3)};
+        term_values[i] = {1.0F, 1.0F};
+        vectors[i] = SparseVector{2, term_ids[i].data(), term_values[i].data()};
+    }
+    auto base = Dataset::Make();
+    base->NumElements(count)->SparseVectors(vectors.data())->Ids(labels.data())->Owner(false);
+
+    SINDI index(parameter, common_param);
+    REQUIRE(index.Build(base).empty());
+
+    std::array<uint32_t, 2> query_ids{1, 2};
+    std::array<float, 2> query_values{1.0F, 1.0F};
+    SparseVector query_vector{2, query_ids.data(), query_values.data()};
+    auto query = Dataset::Make();
+    query->NumElements(1)->SparseVectors(&query_vector)->Owner(false);
+
+    const auto params = [batch_size](int64_t parallelism_value) {
+        return fmt::format(
+            R"({{"sindi":{{"n_candidate":16,"query_prune_ratio":0.0,"term_prune_ratio":0.0,"parallelism":{},"parallel_window_batch_size":{}}}}})",
+            parallelism_value,
+            batch_size);
+    };
+    const auto limited_params = [batch_size](int64_t parallelism_value) {
+        return fmt::format(
+            R"({{"sindi":{{"n_candidate":16,"query_prune_ratio":0.0,"term_prune_ratio":0.0,"filter_callback_limit":5,"parallelism":{},"parallel_window_batch_size":{}}}}})",
+            parallelism_value,
+            batch_size);
+    };
+
+    const auto serial = index.KnnSearch(query, k, params(1), nullptr);
+    const auto parallel = index.KnnSearch(query, k, params(parallelism), nullptr);
+    RequireSameSindiResult(serial, parallel);
+
+    // An early filter stop leaves unconsumed (non-zero) distances behind, so this also checks
+    // that such buffers are cleaned before they are handed to the next search.
+    auto serial_filter = std::make_shared<CountingFilter>(1004);
+    const auto serial_limited = index.KnnSearch(query, k, limited_params(1), serial_filter);
+    auto parallel_filter = std::make_shared<CountingFilter>(1004);
+    const auto parallel_limited =
+        index.KnnSearch(query, k, limited_params(parallelism), parallel_filter);
+    RequireSameSindiResult(serial_limited, parallel_limited);
+    REQUIRE(parallel_filter->Count() == serial_filter->Count());
+
+    for (int64_t repeat = 0; repeat < 3; ++repeat) {
+        const auto reused = index.KnnSearch(query, k, params(parallelism), nullptr);
+        RequireSameSindiResult(serial, reused);
+    }
+}
+
+TEST_CASE("SINDI parallel windows fall back without a pool", "[ut][SINDI]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+    IndexCommonParam common_param;
+    common_param.allocator_ = allocator;
+    common_param.metric_ = MetricType::METRIC_TYPE_IP;
+    common_param.dim_ = 1;
+
+    auto parameter = std::make_shared<SINDIParameter>();
+    parameter->term_id_limit = 2;
+    parameter->window_size = 4;
+    parameter->avg_doc_term_length = 1;
+
+    constexpr uint64_t count = 8;
+    uint32_t term = 1;
+    std::vector<int64_t> labels(count);
+    std::vector<float> values(count);
+    std::vector<SparseVector> vectors(count);
+    for (uint64_t i = 0; i < count; ++i) {
+        labels[i] = static_cast<int64_t>(i);
+        values[i] = 1.0F + static_cast<float>(i);
+        vectors[i] = SparseVector{1, &term, &values[i]};
+    }
+    auto base = Dataset::Make();
+    base->NumElements(count)->SparseVectors(vectors.data())->Ids(labels.data())->Owner(false);
+    SINDI index(parameter, common_param);
+    REQUIRE(index.Build(base).empty());
+
+    float query_value = 1.0F;
+    SparseVector query_vector{1, &term, &query_value};
+    auto query = Dataset::Make();
+    query->NumElements(1)->SparseVectors(&query_vector)->Owner(false);
+    const auto serial =
+        index.KnnSearch(query, 2, R"({"sindi":{"n_candidate":2,"parallelism":1}})", nullptr);
+    const auto fallback =
+        index.KnnSearch(query, 2, R"({"sindi":{"n_candidate":2,"parallelism":8}})", nullptr);
+    RequireSameSindiResult(serial, fallback);
+}
+
+TEST_CASE("SINDI parallel windows drain tasks after enqueue failure", "[ut][SINDI]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+    auto throwing_pool = std::make_shared<ThrowingThreadPool>();
+    IndexCommonParam common_param;
+    common_param.allocator_ = allocator;
+    common_param.metric_ = MetricType::METRIC_TYPE_IP;
+    common_param.dim_ = 1;
+    common_param.thread_pool_ = std::make_shared<SafeThreadPool>(throwing_pool);
+
+    auto parameter = std::make_shared<SINDIParameter>();
+    parameter->term_id_limit = 2;
+    parameter->window_size = 4;
+    parameter->avg_doc_term_length = 1;
+
+    constexpr uint64_t count = 12;
+    uint32_t term = 1;
+    std::vector<int64_t> labels(count);
+    std::vector<float> values(count, 1.0F);
+    std::vector<SparseVector> vectors(count);
+    for (uint64_t i = 0; i < count; ++i) {
+        labels[i] = static_cast<int64_t>(i);
+        vectors[i] = SparseVector{1, &term, &values[i]};
+    }
+    auto base = Dataset::Make();
+    base->NumElements(count)->SparseVectors(vectors.data())->Ids(labels.data())->Owner(false);
+    SINDI index(parameter, common_param);
+    REQUIRE(index.Build(base).empty());
+
+    float query_value = 1.0F;
+    SparseVector query_vector{1, &term, &query_value};
+    auto query = Dataset::Make();
+    query->NumElements(1)->SparseVectors(&query_vector)->Owner(false);
+    REQUIRE_THROWS_AS(
+        index.KnnSearch(
+            query,
+            2,
+            R"({"sindi":{"n_candidate":2,"parallelism":2,"parallel_window_batch_size":1}})",
+            nullptr),
+        std::runtime_error);
+    REQUIRE_NOTHROW(
+        index.KnnSearch(query, 2, R"({"sindi":{"n_candidate":2,"parallelism":1}})", nullptr));
+}
 
 TEST_CASE("SINDI Filter Callback Limit", "[ut][SINDI]") {
     auto allocator = SafeAllocator::FactoryDefaultAllocator();

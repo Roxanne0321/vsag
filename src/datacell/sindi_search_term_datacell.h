@@ -131,6 +131,9 @@ struct SindiQueryContext {
     MappedQueryTerms mapped_query_terms;
     bool has_untracked_approximate_evaluations{false};
     mutable SparseEvaluationTracker candidate_tracker;
+    // Raw cycles of this window's candidate evaluation and of its heap insertion.
+    uint64_t window_compute_cycles{0};
+    uint64_t window_heap_cycles{0};
 };
 
 /**

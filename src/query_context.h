@@ -19,10 +19,17 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <map>
 #include <string>
+
+#if defined(__x86_64__) || defined(_M_X64)
+#include <x86intrin.h>
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#include <arm_neon.h>
+#endif
 
 #include "metric_type.h"
 #include "search_metrics_names.h"
@@ -47,6 +54,45 @@ struct QueryContext {
     bool track_distance_evaluations = true;
     bool enable_rabitq_reorder = true;
     QueryComputerPool* computer_pool = nullptr;
+};
+
+// Low-overhead per-thread cycle counter used only for search-time profiling.
+// x86_64 reads TSC, aarch64 reads CNTVCT_EL0; other platforms fall back to
+// steady_clock, which is slower but keeps the API usable.
+inline uint64_t
+CurrentThreadCycleCounter() {
+#if defined(__x86_64__) || defined(_M_X64)
+    return static_cast<uint64_t>(__rdtsc());
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    uint64_t value = 0;
+    __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(value));
+    return value;
+#else
+    return static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+#endif
+}
+
+// SINDI window search is split into two measurable stages: candidate evaluation
+// per window (SINDI::QueryWindow) and top-k heap insertion (SINDI::InsertHeap*).
+// Both are accumulated in raw counter cycles and converted to time by the
+// caller, so that no clock frequency is hard-coded in the index.
+struct SINDIWindowStatistics {
+    uint64_t compute_cycles{0};
+    uint64_t heap_cycles{0};
+
+    void
+    Add(const SINDIWindowStatistics& other) {
+        this->compute_cycles += other.compute_cycles;
+        this->heap_cycles += other.heap_cycles;
+    }
+
+    [[nodiscard]] JsonType
+    ToJson() const {
+        JsonType j;
+        j["window_compute_cycles"].SetUint64(compute_cycles);
+        j["window_heap_cycles"].SetUint64(heap_cycles);
+        return j;
+    }
 };
 
 class ScopedDistancePhase {
@@ -197,6 +243,8 @@ public:
         j["query_computer_count"].SetUint64(query_computer_count.load(std::memory_order_relaxed));
         j["parallel_search_fallback_count"].SetUint64(
             parallel_search_fallback_count.load(std::memory_order_relaxed));
+        j["window_compute_cycles"].SetUint64(window_compute_cycles.load(std::memory_order_relaxed));
+        j["window_heap_cycles"].SetUint64(window_heap_cycles.load(std::memory_order_relaxed));
         j["distance_evaluations"].SetUint64(distance_evaluations.load(std::memory_order_relaxed));
         for (uint64_t i = 0; i < distance_evaluations_by_phase.size(); ++i) {
             j["distance_evaluations_by_phase"]
@@ -233,6 +281,9 @@ public:
     std::atomic<uint32_t> rabitq_reorder_fallback_full_count{0};
     std::atomic<uint32_t> query_computer_count{0};
     std::atomic<uint32_t> parallel_search_fallback_count{0};
+    // Raw cycles spent in SINDI window candidate evaluation and top-k heap insertion.
+    std::atomic<uint64_t> window_compute_cycles{0};
+    std::atomic<uint64_t> window_heap_cycles{0};
     std::atomic<uint64_t> distance_evaluations{0};
     std::array<std::atomic<uint64_t>, static_cast<uint8_t>(DistanceEvaluationPhase::COUNT)>
         distance_evaluations_by_phase{};

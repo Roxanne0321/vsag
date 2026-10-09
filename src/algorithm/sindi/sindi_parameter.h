@@ -40,6 +40,9 @@ static constexpr const char* SPARSE_RERANK_TYPE_DMQ8 = "dmq8";
 static constexpr const char* SPARSE_DMQ_SHARED_CODEBOOK_THRESHOLD = "dmq_shared_codebook_threshold";
 static constexpr uint32_t DEFAULT_SPARSE_DMQ_SHARED_CODEBOOK_THRESHOLD = 1024;
 
+// Auto value for SINDISearchParameter::parallel_window_batch_size.
+static constexpr int64_t DEFAULT_PARALLEL_WINDOW_BATCH_SIZE = 8;
+
 std::string
 SparseValueQuantizationTypeToString(SparseValueQuantizationType type);
 
@@ -96,6 +99,10 @@ public:
     // search
     uint32_t n_candidate{0};
     uint64_t filter_callback_limit{0};
+
+    // Number of consecutive windows packed into one parallel window task.
+    // 0 means auto: min(DEFAULT_PARALLEL_WINDOW_BATCH_SIZE, window count).
+    int64_t parallel_window_batch_size{0};
 
     // data cell
     float query_prune_ratio{0};

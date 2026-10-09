@@ -274,6 +274,18 @@ SINDISearchParameter::FromJson(const JsonType& json) {
         n_candidate = DEFAULT_N_CANDIDATE;
     }
 
+    parallel_window_batch_size = 0;
+    if (search_json.Contains(SPARSE_PARALLEL_WINDOW_BATCH_SIZE)) {
+        const auto batch_json = search_json[SPARSE_PARALLEL_WINDOW_BATCH_SIZE];
+        CHECK_ARGUMENT(batch_json.IsNumberInteger(),
+                       "parallel_window_batch_size must be an integer");
+        const auto batch_size = batch_json.GetInt();
+        CHECK_ARGUMENT(
+            batch_size >= 0,
+            fmt::format("parallel_window_batch_size must be non-negative, got {}", batch_size));
+        parallel_window_batch_size = batch_size;
+    }
+
     if (search_json.Contains(LEGACY_USE_TERM_LISTS_HEAP_INSERT_KEY)) {
         logger::warn(
             "SINDI search parameter use_term_lists_heap_insert is ignored. "
@@ -290,6 +302,8 @@ SINDISearchParameter::ToJson() const {
     json[INDEX_SINDI][SPARSE_FILTER_CALLBACK_LIMIT].SetUint64(filter_callback_limit);
     json[INDEX_SINDI][SPARSE_TERM_PRUNE_RATIO].SetFloat(term_prune_ratio);
     json[INDEX_SINDI][SPARSE_TERM_RETAIN_THRESHOLD].SetUint64(term_retain_threshold);
+    json[INDEX_SINDI][SEARCH_PARALLELISM].SetInt64(parallel_search_thread_count);
+    json[INDEX_SINDI][SPARSE_PARALLEL_WINDOW_BATCH_SIZE].SetInt64(parallel_window_batch_size);
     return json;
 }
 

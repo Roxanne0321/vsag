@@ -104,7 +104,9 @@ TEST_CASE("SINDI Index Parameters Test", "[ut][SINDIParameter]") {
             "n_candidate": 20,
             "term_prune_ratio": 0.1,
             "term_retain_threshold": 100,
-            "filter_callback_limit": 1000
+            "filter_callback_limit": 1000,
+            "parallelism": 4,
+            "parallel_window_batch_size": 8
         }
     })";
     auto search_param = std::make_shared<vsag::SINDISearchParameter>();
@@ -113,10 +115,14 @@ TEST_CASE("SINDI Index Parameters Test", "[ut][SINDIParameter]") {
     REQUIRE(search_param->term_prune_ratio == 0.1F);
     REQUIRE(search_param->term_retain_threshold == 100);
     REQUIRE(search_param->filter_callback_limit == 1000);
+    REQUIRE(search_param->parallel_search_thread_count == 4);
+    REQUIRE(search_param->parallel_window_batch_size == 8);
     vsag::ParameterTest::TestToJson(search_param);
     REQUIRE(search_param->ToJson()[INDEX_SINDI].Contains("term_prune_ratio"));
     REQUIRE(search_param->ToJson()[INDEX_SINDI].Contains("term_retain_threshold"));
     REQUIRE(search_param->ToJson()[INDEX_SINDI].Contains("filter_callback_limit"));
+    REQUIRE(search_param->ToJson()[INDEX_SINDI][SEARCH_PARALLELISM].GetInt() == 4);
+    REQUIRE(search_param->ToJson()[INDEX_SINDI][SPARSE_PARALLEL_WINDOW_BATCH_SIZE].GetInt() == 8);
     REQUIRE_FALSE(search_param->ToJson()[INDEX_SINDI].Contains("term_prune"));
     REQUIRE_FALSE(search_param->ToJson()[INDEX_SINDI].Contains("use_term_lists_heap_insert"));
 
@@ -132,6 +138,48 @@ TEST_CASE("SINDI Index Parameters Test", "[ut][SINDIParameter]") {
     legacy_search_param->FromJson(vsag::JsonType::Parse(legacy_search_param_str));
     REQUIRE_FALSE(
         legacy_search_param->ToJson()[INDEX_SINDI].Contains("use_term_lists_heap_insert"));
+}
+
+TEST_CASE("SINDI Parallelism Parameters", "[ut][SINDIParameter]") {
+    SECTION("uses serial default") {
+        SINDISearchParameter param;
+        param.FromJson(JsonType::Parse(R"({"sindi": {}})"));
+        REQUIRE(param.parallel_search_thread_count == 1);
+        REQUIRE(param.ToJson()[INDEX_SINDI][SEARCH_PARALLELISM].GetInt() == 1);
+    }
+
+    SECTION("normalizes non-positive values to serial") {
+        for (const auto value : {0, -1}) {
+            SINDISearchParameter param;
+            param.FromJson(
+                JsonType::Parse(fmt::format(R"({{"sindi": {{"parallelism": {}}}}})", value)));
+            REQUIRE(param.parallel_search_thread_count == 1);
+        }
+    }
+
+    SECTION("window batch size defaults to auto") {
+        SINDISearchParameter param;
+        param.FromJson(JsonType::Parse(R"({"sindi": {}})"));
+        REQUIRE(param.parallel_window_batch_size == 0);
+        REQUIRE(param.ToJson()[INDEX_SINDI][SPARSE_PARALLEL_WINDOW_BATCH_SIZE].GetInt() == 0);
+    }
+
+    SECTION("accepts an explicit window batch size") {
+        for (const auto value : {1, 8, 64}) {
+            SINDISearchParameter param;
+            param.FromJson(JsonType::Parse(
+                fmt::format(R"({{"sindi": {{"parallel_window_batch_size": {}}}}})", value)));
+            REQUIRE(param.parallel_window_batch_size == value);
+            REQUIRE(param.ToJson()[INDEX_SINDI][SPARSE_PARALLEL_WINDOW_BATCH_SIZE].GetInt() ==
+                    value);
+        }
+    }
+
+    SECTION("rejects a negative window batch size") {
+        SINDISearchParameter param;
+        REQUIRE_THROWS(
+            param.FromJson(JsonType::Parse(R"({"sindi": {"parallel_window_batch_size": -1}})")));
+    }
 }
 
 TEST_CASE("SINDI Filter Callback Limit Parameters", "[ut][SINDIParameter]") {
